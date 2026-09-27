@@ -48,6 +48,7 @@ describe("AnthropicProvider request contract", () => {
     const body = JSON.parse(String(calls[0]!.init.body));
     expect(body.system[0]).toMatchObject({ text: "STATIC", cache_control: { type: "ephemeral" } });
     expect(body.system[1]).toEqual({ type: "text", text: "DYNAMIC" });
+    expect(body.cache_control).toEqual({ type: "ephemeral" });
     expect(body.thinking).toEqual({ type: "adaptive" });
     expect(body.output_config).toEqual({ effort: "low" });
     expect(body.fallbacks).toBe("default");
@@ -70,6 +71,7 @@ describe("AnthropicProvider request contract", () => {
     const body = JSON.parse(String(calls[0]!.init.body));
     expect(body.thinking).toBeUndefined();
     expect(body.fallbacks).toBeUndefined();
+    expect(body.cache_control).toBeUndefined();
   });
 });
 

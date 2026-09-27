@@ -3,7 +3,8 @@ import type { ChatBlock, ChatMessage, LLMProvider, LLMRequest, LLMResponse } fro
 
 /**
  * Claude adapter.
- *  - Prompt caching: tools + static system prompt are cached (breakpoint on the static block).
+ *  - Prompt caching: tools + static system prompt are cached (explicit breakpoint on the static block),
+ *    plus top-level automatic caching for the conversation tail.
  *  - Adaptive thinking with configurable effort on the main model; thinking blocks
  *    are echoed back unchanged within a tool loop via `raw`.
  *  - Optional server-side refusal fallback ("fallbacks": "default").
@@ -33,6 +34,8 @@ export class AnthropicProvider implements LLMProvider {
       ...(req.tools?.length
         ? { tools: req.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })) }
         : {}),
+      // Automatic caching of the growing message tail: tool-loop iterations and quick follow-ups re-read history at cache price.
+      ...(!req.lightweight ? { cache_control: { type: "ephemeral" } } : {}),
       ...(supportsThinking ? { thinking: { type: "adaptive" } } : {}),
       ...(supportsThinking && req.effort ? { output_config: { effort: req.effort } } : {}),
     };
