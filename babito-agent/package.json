@@ -14,9 +14,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:migrate": "tsx scripts/migrate.ts",
-    "chat": "tsx scripts/chat.ts",
-    "eval": "tsx scripts/eval.ts"
+    "db:migrate": "tsx --env-file-if-exists=.env scripts/migrate.ts",
+    "chat": "tsx --env-file-if-exists=.env scripts/chat.ts",
+    "eval": "tsx --env-file-if-exists=.env scripts/eval.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

@@ -8,6 +8,10 @@
  *   npm run eval -- --only ar-strollers,he-hi # selected scenarios
  *   npm run eval -- --category shipping
  *   EVAL_KB_FILE=kb-draft.json npm run eval   # test draft knowledge-base answers before activating them in Supabase
+ *   AI_MODEL_MAIN=claude-sonnet-5 npm run eval # compare models
+ *
+ * Without Shopify Admin credentials the catalog and policies come from the
+ * store's public storefront JSON (live data); order lookups then use fixtures.
  *
  * Costs real API money (see --dry-run for an estimate). Re-run after every
  * prompt change and compare reports.
@@ -20,6 +24,7 @@ import { buildServices } from "../src/services.js";
 import type { WhatsAppSender } from "../src/whatsapp/client.js";
 import { createTestDb } from "../test/helpers/pglite.js";
 import { SCENARIOS, type Scenario } from "./eval-scenarios.js";
+import { PublicStorefrontShopify } from "./eval-storefront.js";
 
 // USD per million tokens: [uncached input, cache read, output]. Cache writes aren't tracked, so totals are a slight underestimate.
 const PRICES: Record<string, [number, number, number]> = {
@@ -48,16 +53,20 @@ if (dryRun) {
   process.exit(0);
 }
 
+const hasAdminCreds = Boolean(process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || (process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET));
 const cfg = loadConfig({
   WHATSAPP_VERIFY_TOKEN: "local-eval-only",
   WHATSAPP_ACCESS_TOKEN: "unused",
   WHATSAPP_PHONE_NUMBER_ID: "local",
   DATABASE_URL: "pglite://memory",
+  ...(hasAdminCreds ? {} : { SHOPIFY_STORE_DOMAIN: "public-storefront", SHOPIFY_ADMIN_ACCESS_TOKEN: "unused" }),
   ...process.env,
   DEBOUNCE_MS: "0",
   NODE_ENV: "development",
 });
 if (!cfg.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set (put it in .env)");
+const storefront = hasAdminCreds ? null : new PublicStorefrontShopify(cfg.STORE_PUBLIC_URL);
+if (storefront) console.log(`No Shopify Admin credentials: using live public storefront data from ${cfg.STORE_PUBLIC_URL} (orders are fixtures).\n`);
 
 const sent = new Map<string, string[]>();
 const capture: WhatsAppSender = {
@@ -72,6 +81,7 @@ const handoffs: { phone: string; reason: string; summary: string | null }[] = []
 const db = await createTestDb();
 const log = pino({ level: process.env.LOG_LEVEL ?? "silent" });
 const services = buildServices(cfg, db, log, {
+  ...(storefront ? { shopify: storefront } : {}),
   whatsapp: capture,
   notifier: { notify: async (n) => void handoffs.push({ phone: n.customerWaId, reason: n.reason, summary: n.summary }) },
 });
@@ -172,7 +182,7 @@ const p = (q: number) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(q
 const md: string[] = [
   `# BABITO agent eval — ${stamp}`,
   ``,
-  `Model: \`${cfg.AI_MODEL_MAIN}\` (effort ${cfg.AI_MODEL_MAIN_EFFORT}) · store: ${cfg.SHOPIFY_STORE_DOMAIN}${kbFile ? ` · KB draft: ${kbFile}` : " · KB: seeded templates (inactive)"}`,
+  `Model: \`${cfg.AI_MODEL_MAIN}\` (effort ${cfg.AI_MODEL_MAIN_EFFORT}) · store: ${storefront ? `${cfg.STORE_PUBLIC_URL} (public storefront data, fixture orders)` : cfg.SHOPIFY_STORE_DOMAIN}${kbFile ? ` · KB draft: ${kbFile}` : " · KB: seeded templates (inactive)"}`,
   ``,
   `**Automatic checks passed: ${passed}/${results.length}** · cost ≈ $${totalUsd.toFixed(2)} ($${(totalUsd / Math.max(1, totalTurns)).toFixed(3)}/turn) · latency p50 ${p(0.5)} ms, p90 ${p(0.9)} ms`,
   ``,
