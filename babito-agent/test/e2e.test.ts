@@ -324,6 +324,18 @@ describe("conversations", () => {
     expect(run.status).toBe("failed");
   });
 
+  it("staff take over while the model is thinking: the AI reply is not sent on top of theirs", async () => {
+    h.llm.push(async () => {
+      const [conv] = await h.q("select id from conversations");
+      await h.q("update conversations set mode = 'human', human_since = now(), human_last_activity_at = now() where id = $1", [conv.id]);
+      return { content: [{ type: "text", text: "תשובה מאוחרת של הבוט" }], stopReason: "end_turn", usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0 }, model: "fake" };
+    });
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "יש לכם מוצץ?"));
+    expect(h.whatsapp.sent).toHaveLength(0);
+    const [inbound] = await h.q("select status, error from messages where direction='inbound'");
+    expect(inbound).toMatchObject({ status: "skipped", error: "staff_took_over" });
+  });
+
   it("WhatsApp API failure: reply is stored as failed and the sweeper resends it", async () => {
     h.whatsapp.failNext = 1;
     h.llm.push(say("שלום! איך אפשר לעזור?"));

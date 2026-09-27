@@ -4,6 +4,7 @@ import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
 import { orderNameQuery, orderStage, searchCatalog, stripHtml } from "../src/shopify/service.js";
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
+import { withRetry } from "../src/util/retry.js";
 import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
 import { CATALOG, CHOKING_ID, mediaWebhook, sign, statusWebhook, textWebhook } from "./helpers/fakes.js";
@@ -36,6 +37,22 @@ describe("webhook signature", () => {
   it("rejects a wrong secret", () => expect(verifySignature(body, sign(body, "other"), "s3cret")).toBe(false));
   it("rejects a missing header", () => expect(verifySignature(body, undefined, "s3cret")).toBe(false));
   it("rejects a tampered body", () => expect(verifySignature(body + " ", sign(body, "s3cret"), "s3cret")).toBe(false));
+  it("rejects a non-hex signature of the right length instead of throwing", () =>
+    expect(verifySignature(body, `sha256=${"z".repeat(64)}`, "s3cret")).toBe(false));
+});
+
+describe("retry", () => {
+  const timeout = () => Object.assign(new Error("timed out"), { name: "TimeoutError" });
+  it("retries timeouts by default", async () => {
+    let n = 0;
+    await expect(withRetry(async () => (++n < 2 ? Promise.reject(timeout()) : "ok"), { baseDelayMs: 1 })).resolves.toBe("ok");
+    expect(n).toBe(2);
+  });
+  it("does not retry timeouts when retryNetworkErrors is false (a send may already have been delivered)", async () => {
+    let n = 0;
+    await expect(withRetry(async () => { n++; throw timeout(); }, { baseDelayMs: 1, retryNetworkErrors: false })).rejects.toThrow("timed out");
+    expect(n).toBe(1);
+  });
 });
 
 describe("webhook parsing", () => {

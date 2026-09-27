@@ -279,11 +279,13 @@ export class MessageProcessor {
 
     let reply = result.reply ? toWhatsAppText(result.reply) : null;
     let status: string = result.status;
+    let handedOffHere = result.handedOff;
     if (!reply) {
       // Fail closed: never leave the customer hanging, never improvise.
       const fallback = settings.handoffExpectation[lang ?? "he"] ?? settings.handoffExpectation.he!;
       const alreadyHuman = result.handedOff;
       if (!alreadyHuman) {
+        handedOffHere = true;
         await performHandoff(this.handoffDeps(), {
           ...this.handoffBase(conv, customer),
           reason: result.flags.includes("model_refusal") ? "sensitive" : "processing_error",
@@ -325,6 +327,14 @@ export class MessageProcessor {
       "agent run finished",
     );
 
+    // Staff may have taken over (or paused the bot) while the model was working.
+    const latest = handedOffHere ? null : await repo.getConversation(this.db, conversationId);
+    if (latest && latest.mode !== "ai") {
+      await repo.setInboundStatus(this.db, ids, "skipped", "staff_took_over");
+      this.log.info({ event: "reply_suppressed", conversationId, runId, mode: latest.mode }, "staff took over during the AI run; reply not sent");
+      return;
+    }
+
     await this.sendReply(conv, customer, reply, runId, "ai");
     await repo.setInboundStatus(this.db, ids, "processed");
 
@@ -346,24 +356,43 @@ export class MessageProcessor {
   /** Persist first (status 'pending'), then send; a failed send stays 'failed' for the sweeper. */
   async sendReply(conv: Conversation, customer: Customer, body: string, runId: string | null, author: "ai" | "system" | "human_agent") {
     const msg = (await repo.insertOutboundMessage(this.db, { conversationId: conv.id, customerId: customer.id, author, body, agentRunId: runId }))!;
+    let waMessageId: string;
     try {
-      const { waMessageId } = await this.deps.whatsapp.sendText(customer.wa_id, body);
-      await repo.markOutboundSent(this.db, msg.id, waMessageId);
-      await repo.touchConversation(this.db, conv.id, "outbound");
-      this.log.info(
-        { event: "message_sent", conversationId: conv.id, author, waMessageId, ...(this.cfg.logBodies ? { body } : { chars: body.length }) },
-        "reply sent",
-      );
+      ({ waMessageId } = await this.deps.whatsapp.sendText(customer.wa_id, body));
     } catch (err) {
       await repo.markOutboundFailed(this.db, msg.id, (err as Error).message);
       this.log.error({ event: "send_failed", conversationId: conv.id, err: (err as Error).message }, "failed to send WhatsApp reply");
+      return msg;
     }
+    // The customer has the message now. A bookkeeping error here must not mark it failed (the sweeper would resend it).
+    try {
+      await repo.markOutboundSent(this.db, msg.id, waMessageId);
+      await repo.touchConversation(this.db, conv.id, "outbound");
+    } catch (err) {
+      this.log.error({ event: "post_send_update_failed", conversationId: conv.id, waMessageId, err: (err as Error).message }, "reply sent but not recorded");
+    }
+    this.log.info(
+      { event: "message_sent", conversationId: conv.id, author, waMessageId, ...(this.cfg.logBodies ? { body } : { chars: body.length }) },
+      "reply sent",
+    );
     return msg;
   }
 
   // -------------------------------------------------------------------- sweeper
 
+  private sweeping = false;
+
   async sweep() {
+    if (this.sweeping) return { rescheduled: 0 };
+    this.sweeping = true;
+    try {
+      return await this.sweepOnce();
+    } finally {
+      this.sweeping = false;
+    }
+  }
+
+  private async sweepOnce() {
     const convs = await repo.conversationsNeedingWork(this.db, 10, this.cfg.maxAttempts);
     for (const id of convs) this.schedule(id, 0);
 

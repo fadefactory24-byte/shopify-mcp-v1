@@ -13,7 +13,7 @@ export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export async function withRetry<T>(
   fn: (attempt: number) => Promise<T>,
-  opts: { retries?: number; baseDelayMs?: number; maxDelayMs?: number } = {},
+  opts: { retries?: number; baseDelayMs?: number; maxDelayMs?: number; retryNetworkErrors?: boolean } = {},
 ): Promise<T> {
   const retries = opts.retries ?? 2;
   const base = opts.baseDelayMs ?? 400;
@@ -24,7 +24,8 @@ export async function withRetry<T>(
       return await fn(attempt);
     } catch (err) {
       lastErr = err;
-      const retryable = err instanceof RetryableError || err instanceof TypeError || (err as Error)?.name === "TimeoutError";
+      const network = err instanceof TypeError || (err as Error)?.name === "TimeoutError";
+      const retryable = err instanceof RetryableError || (network && opts.retryNetworkErrors !== false);
       if (!retryable || attempt === retries) throw err;
       const hinted = err instanceof RetryableError ? err.retryAfterMs : undefined;
       const delay = Math.min(hinted ?? base * 2 ** attempt + Math.random() * 100, max);

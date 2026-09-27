@@ -26,7 +26,7 @@ export class WhatsAppCloudClient implements WhatsAppSender {
     return `https://graph.facebook.com/${this.opts.graphVersion}/${this.opts.phoneNumberId}/messages`;
   }
 
-  private async post(payload: unknown): Promise<any> {
+  private async post(payload: unknown, opts: { retryNetworkErrors?: boolean } = {}): Promise<any> {
     const f = this.opts.fetchImpl ?? fetch;
     return withRetry(
       async () => {
@@ -52,7 +52,7 @@ export class WhatsAppCloudClient implements WhatsAppSender {
         }
         throw new WhatsAppApiError(msg, res.status, code);
       },
-      { retries: 2, baseDelayMs: 500 },
+      { retries: 2, baseDelayMs: 500, retryNetworkErrors: opts.retryNetworkErrors },
     );
   }
 
@@ -63,7 +63,7 @@ export class WhatsAppCloudClient implements WhatsAppSender {
       to,
       type: "text",
       text: { preview_url: true, body },
-    });
+    }, { retryNetworkErrors: false }); // a timed-out send may already be delivered; retrying would duplicate it
     const id = json?.messages?.[0]?.id;
     if (!id) throw new WhatsAppApiError("WhatsApp API returned no message id", 200);
     return { waMessageId: id as string };
