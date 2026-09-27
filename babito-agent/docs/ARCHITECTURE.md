@@ -39,7 +39,7 @@ which keeps the MVP simple and fully recoverable after a crash.
 
 | Decision | Why |
 |---|---|
-| **Core agent in code, not n8n.** n8n is optional, used only as a notification sink (`STAFF_NOTIFY_WEBHOOK_URL`) and later for campaigns. | Idempotency, per-conversation locking, guardrails, and 88 automated tests are hard to do reliably in n8n. The critical path must be versioned, testable code. |
+| **Core agent in code, not n8n.** n8n is optional, used only as a notification sink (`STAFF_NOTIFY_WEBHOOK_URL`) and later for campaigns. | Idempotency, per-conversation locking, guardrails, and 90+ automated tests are hard to do reliably in n8n. The critical path must be versioned, testable code. |
 | **Long-running Node server (Railway/Fly/Render), not Vercel functions.** | Debouncing, the sweeper, and fire-and-forget work need a process that stays alive. Vercel is fine later for a Next.js dashboard. |
 | **Direct Postgres (`DATABASE_URL`) instead of supabase-js + service-role key.** | Transactions, leases and atomic claims need real SQL. There is no Supabase key in the app at all; RLS is on with no policies, so browser keys (anon/authenticated) can read nothing. |
 | **Merged tools**: `get_product` includes availability (no separate `get_product_inventory`); `get_order_status` includes tracking (no separate `track_order`); `request_order_change` replaces `create_support_ticket` for order issues; shipping info comes from `get_knowledge`. | Fewer tools = fewer wrong tool choices and fewer tokens. Every tool has a clear job. |
