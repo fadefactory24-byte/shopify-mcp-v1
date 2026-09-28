@@ -229,8 +229,9 @@ export const repo = {
     await db.query(`update messages set status = 'sent', wa_message_id = $2, attempts = attempts + 1, error = null where id = $1`, [id, waMessageId]);
   },
 
-  async markOutboundFailed(db: Db, id: string, error: string) {
-    await db.query(`update messages set status = 'failed', attempts = attempts + 1, error = $2 where id = $1`, [id, error.slice(0, 500)]);
+  /** Pass `noRetryAt` (the retry limit) for errors a resend cannot fix: attempts jump to it, so the sweeper skips the message. */
+  async markOutboundFailed(db: Db, id: string, error: string, noRetryAt = 0) {
+    await db.query(`update messages set status = 'failed', attempts = greatest(attempts + 1, $3), error = $2 where id = $1`, [id, error.slice(0, 500), noRetryAt]);
   },
 
   /** Delivery receipts only move forward (sent -> delivered -> read); 'failed' always applies. */

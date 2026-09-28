@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { repo } from "../src/db/repo.js";
+import { WhatsAppApiError } from "../src/whatsapp/client.js";
 import { callTool, CHOKING_ID, CUSTOMER_PHONE, lastToolResults, mediaWebhook, refuse, say, statusWebhook, textWebhook } from "./helpers/fakes.js";
 import { createHarness, type Harness } from "./helpers/harness.js";
 
@@ -352,6 +353,30 @@ describe("conversations", () => {
     expect(h.whatsapp.sent.map((s) => s.body)).toEqual(["שלום! איך אפשר לעזור?"]);
     [out] = await h.q("select status from messages where direction='outbound'");
     expect(out.status).toBe("sent");
+  });
+
+  it("WhatsApp errors a resend cannot fix (131047 outside the 24h window) are not retried by the sweeper", async () => {
+    h.whatsapp.failNext = 1;
+    h.whatsapp.failWith = () => new WhatsAppApiError("WhatsApp API 400 (code 131047): Re-engagement message", 400, 131047);
+    h.llm.push(say("שלום! איך אפשר לעזור?"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    await h.processor.sweep();
+    expect(h.whatsapp.sent).toHaveLength(0);
+    const [out] = await h.q("select status, error from messages where direction='outbound'");
+    expect(out.status).toBe("failed");
+    expect(out.error).toContain("131047");
+  });
+
+  it("typing indicator only when the AI is going to answer, not in human mode", async () => {
+    h.llm.push(say("שלום!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי", { id: "wamid.ai" }));
+    expect(h.whatsapp.typing).toEqual(["wamid.ai"]);
+
+    const [conv] = await h.q("select id from conversations");
+    await h.q("update conversations set mode = 'human', human_since = now(), human_last_activity_at = now() where id = $1", [conv.id]);
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "יש מישהו?", { id: "wamid.human" }));
+    expect(h.whatsapp.reads).toContain("wamid.human"); // plain read receipt
+    expect(h.whatsapp.typing).toEqual(["wamid.ai"]);
   });
 
   it("voice note: polite text-only reply, no LLM cost", async () => {

@@ -106,7 +106,7 @@ No store facts live in the prompt — prices, policies and shipping times are al
 | Crash mid-processing | Lease expires → sweeper resets messages to `received` → reprocessed (max 3 attempts, then handoff as above). On SIGTERM, runs still going after 90s are re-queued and their leases released |
 | Shopify down / throttled | 2 retries with backoff; then the tool returns `store_system_unavailable` and the model says it can't check now |
 | Claude down / refusal / guardrail fails twice | Fail closed: fallback text + human handoff; nothing invented |
-| WhatsApp send fails | Stored as `failed`; sweeper retries within 3 minutes (stale replies are not resent) |
+| WhatsApp send fails | Stored as `failed`; sweeper retries within 3 minutes (stale replies are not resent). Errors a resend can't fix (131047 outside the 24h window, 131026 undeliverable…) are not retried |
 | Human took over | AI silent until staff release the chat or 24h of staff inactivity |
 
 ## Extension points

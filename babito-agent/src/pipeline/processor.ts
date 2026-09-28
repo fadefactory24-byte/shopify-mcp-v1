@@ -6,7 +6,7 @@ import type { Db } from "../db/client.js";
 import { repo, type Conversation, type Customer, type MessageRow } from "../db/repo.js";
 import { maskPhone, type Logger } from "../logger.js";
 import { detectLanguage, toWhatsAppText, truncate } from "../util/text.js";
-import type { WhatsAppSender } from "../whatsapp/client.js";
+import { isPermanentSendError, type WhatsAppSender } from "../whatsapp/client.js";
 import type { EchoMessage, InboundMessage, StatusUpdate } from "../whatsapp/webhook.js";
 import { performHandoff } from "./handoff.js";
 
@@ -94,8 +94,9 @@ export class MessageProcessor {
         },
         "inbound message stored",
       );
+      // Read receipt only: "typing…" is shown once the AI actually starts on the batch (handleBatch).
       if (m.type !== "reaction") {
-        this.deps.whatsapp.markRead(m.waMessageId, this.cfg.typingIndicator).catch((err) => this.log.debug({ err: String(err) }, "markRead failed"));
+        this.deps.whatsapp.markRead(m.waMessageId, false).catch((err) => this.log.debug({ err: String(err) }, "markRead failed"));
       }
     }
     return { conversationIds: [...convIds], duplicates };
@@ -300,6 +301,10 @@ export class MessageProcessor {
     }
 
     // ------------------------------------------------------------------ AI run
+    const lastText = pending.filter((p) => p.body && p.wa_message_id).at(-1);
+    if (this.cfg.typingIndicator && lastText) {
+      this.deps.whatsapp.markRead(lastText.wa_message_id!, true).catch((err) => this.log.debug({ err: String(err) }, "typing indicator failed"));
+    }
     const started = Date.now();
     const runId = await repo.createRun(this.db, conversationId, this.deps.config.model);
     await repo.linkInboundToRun(this.db, ids, runId);
@@ -449,7 +454,7 @@ export class MessageProcessor {
     try {
       ({ waMessageId } = await this.deps.whatsapp.sendText(customer.wa_id, body));
     } catch (err) {
-      await repo.markOutboundFailed(this.db, msg.id, (err as Error).message);
+      await this.markSendFailed(msg.id, err);
       this.log.error({ event: "send_failed", conversationId: conv.id, err: (err as Error).message }, "failed to send WhatsApp reply");
       return msg;
     }
@@ -465,6 +470,11 @@ export class MessageProcessor {
       "reply sent",
     );
     return msg;
+  }
+
+  /** Errors like 131047 (outside the 24h window) fail the same way on every resend: don't let the sweeper retry them. */
+  private markSendFailed(messageId: string, err: unknown) {
+    return repo.markOutboundFailed(this.db, messageId, (err as Error).message, isPermanentSendError(err) ? this.cfg.maxAttempts : 0);
   }
 
   // -------------------------------------------------------------------- sweeper
@@ -493,7 +503,7 @@ export class MessageProcessor {
         await repo.markOutboundSent(this.db, m.id, waMessageId);
         this.log.info({ event: "resend_ok", messageId: m.id }, "resent failed reply");
       } catch (err) {
-        await repo.markOutboundFailed(this.db, m.id, (err as Error).message);
+        await this.markSendFailed(m.id, err);
       }
     }
     return { rescheduled: ready.length };

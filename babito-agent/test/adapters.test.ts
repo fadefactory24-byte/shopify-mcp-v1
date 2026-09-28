@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AnthropicProvider } from "../src/agent/anthropic.js";
 import { ShopifyError, ShopifyGraphQLClient } from "../src/shopify/client.js";
 import { LiveShopifyService } from "../src/shopify/service.js";
-import { WhatsAppApiError, WhatsAppCloudClient } from "../src/whatsapp/client.js";
+import { isPermanentSendError, WhatsAppApiError, WhatsAppCloudClient } from "../src/whatsapp/client.js";
 
 type Call = { url: string; init: RequestInit };
 function mockFetch(responses: (() => Response)[]) {
@@ -127,7 +127,10 @@ describe("WhatsApp client", () => {
   it("does not retry business errors like the 24h window (131047)", async () => {
     const { f, calls } = mockFetch([json({ error: { message: "Re-engagement message", code: 131047 } }, 400)]);
     const c = new WhatsAppCloudClient({ accessToken: "tok", phoneNumberId: "PNID", graphVersion: "v23.0", fetchImpl: f });
-    await expect(c.sendText("972501234567", "hi")).rejects.toBeInstanceOf(WhatsAppApiError);
+    const err = await c.sendText("972501234567", "hi").catch((e) => e);
+    expect(err).toBeInstanceOf(WhatsAppApiError);
+    expect(isPermanentSendError(err)).toBe(true); // the sweeper won't resend it either
     expect(calls).toHaveLength(1);
+    expect(isPermanentSendError(new WhatsAppApiError("WhatsApp API 500: boom", 500))).toBe(false);
   });
 });

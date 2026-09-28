@@ -124,19 +124,24 @@ export class FakeShopify implements ShopifyService {
 export class FakeWhatsApp implements WhatsAppSender {
   sent: { to: string; body: string; id: string }[] = [];
   reads: string[] = [];
+  /** Message ids a typing indicator was shown for. */
+  typing: string[] = [];
   failNext = 0;
+  /** What a failing send throws (default: a retryable 500). */
+  failWith = () => new WhatsAppApiError("WhatsApp API 500: boom", 500);
   private n = 0;
   async sendText(to: string, body: string) {
     if (this.failNext > 0) {
       this.failNext--;
-      throw new WhatsAppApiError("WhatsApp API 500: boom", 500);
+      throw this.failWith();
     }
     const id = `wamid.out.${++this.n}`;
     this.sent.push({ to, body, id });
     return { waMessageId: id };
   }
-  async markRead(id: string) {
+  async markRead(id: string, typing: boolean) {
     this.reads.push(id);
+    if (typing) this.typing.push(id);
   }
 }
 

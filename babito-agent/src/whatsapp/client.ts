@@ -13,6 +13,17 @@ export class WhatsAppApiError extends Error {
 }
 
 /**
+ * Send errors that fail the same way on every resend: 131047 outside the 24h window (needs a
+ * template), 131026 undeliverable, 131051 unsupported type, 131021 recipient is the sender,
+ * 131049 not delivered by Meta, 100/131008/131009 invalid request.
+ */
+const PERMANENT_ERROR_CODES = new Set([100, 131008, 131009, 131021, 131026, 131047, 131049, 131051]);
+
+export function isPermanentSendError(err: unknown): boolean {
+  return err instanceof WhatsAppApiError && err.code !== undefined && PERMANENT_ERROR_CODES.has(err.code);
+}
+
+/**
  * WhatsApp Cloud API client. Retries 429/5xx/network errors with backoff.
  * Does NOT retry 4xx business errors (e.g. 131047: outside the 24h window) —
  * those need a template message or human action, retrying just burns quota.
