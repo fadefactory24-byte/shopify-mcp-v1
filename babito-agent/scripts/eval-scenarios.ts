@@ -26,7 +26,8 @@ export interface Scenario {
   good: string;
 }
 
-const DISCOUNT_CODE = /\b[A-Z0-9]{5,}\b.*(קוד|كود|code)|(קוד|كود|code).*\b[A-Z0-9]{5,}\b/i;
+// An uppercase token with letters and digits (WELCOME10, TAKE10OFF...) — case-sensitive on purpose.
+const DISCOUNT_CODE = /\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,}\b/;
 const QUANTITY = /\b\d{2,}\s*(יחידות|במלאי|قطع|حبة|units|in stock)/i;
 
 export const SCENARIOS: Scenario[] = [
@@ -37,7 +38,9 @@ export const SCENARIOS: Scenario[] = [
   { id: "he-monitor", category: "price", lang: "he", turns: ["יש לכם מוניטור לתינוק? כמה עולה?"], expect: { tools: ["search_products"], handoff: false }, good: "SafeView monitor, price range/variants, link. Hebrew." },
   { id: "he-twin-stock", category: "product", lang: "he", turns: ["יש עגלת תאומים?", "כמה זה?", "יש במלאי?"], expect: { tools: ["get_product"], handoff: false, forbid: [QUANTITY] }, good: "Twin stroller; price from tool; says available/not available — never a quantity." },
   { id: "mixed-carrier", category: "product", lang: "ar", turns: ["في عندكم מנשא للبيبي؟"], expect: { tools: ["search_products"], handoff: false }, good: "Understands the mixed Arabic/Hebrew, answers in Arabic with the ergonomic carrier." },
-  { id: "arabizi-light-stroller", category: "product", lang: "ar", turns: ["3andkom 3arabaye 5afife lal baby?"], expect: { tools: ["search_products"], handoff: false }, good: "Understands Arabizi; lightweight stroller options (SkyLift High Landscape / Ultra Light)." },
+  { id: "arabizi-light-stroller", category: "product", lang: "ar", turns: ["3andkom 3arabaye 5afife lal baby?"], expect: { tools: ["search_products"], handoff: false }, good: "Understands Arabizi; replies in Arabic script; lightweight stroller options (SkyLift High Landscape / Ultra Light)." },
+  { id: "arabizi-price", category: "price", lang: "ar", turns: ["shu si3r el monitor tab3 el baby?"], expect: { tools: ["search_products"], handoff: false }, good: "Arabizi → Arabic reply with the SafeView monitor prices." },
+  { id: "ar-gender-neutral", category: "product", lang: "ar", turns: ["بدي اشتري منشا للبيبي، شو في ألوان؟"], expect: { tools: ["get_product", "search_products"], handoff: false }, good: "No gendered guesses about the customer (no بتحبي / بتحب assumptions); lists colours from the tool." },
   { id: "en-espresso", category: "price", lang: "en", turns: ["Hi, how much is the portable espresso machine?"], expect: { tools: ["search_products"], handoff: false }, good: "English reply, ESPRO price range from the tool, link." },
   { id: "ar-skylift-compare", category: "recommend", lang: "ar", turns: ["شو الفرق بين SkyLift Pro و SkyLift Lite؟"], expect: { tools: ["get_product"], handoff: false }, good: "Compares only what the two product descriptions say; no invented specs." },
   { id: "he-girls-clothes-size", category: "product", lang: "he", turns: ["יש לכם בגדים לבנות בגיל 3?"], expect: { tools: ["search_products"], handoff: false }, good: "Shows girls' outfits; checks sizes via get_product options before claiming age 3 is available." },
@@ -63,7 +66,7 @@ export const SCENARIOS: Scenario[] = [
   { id: "ar-where-order", category: "order", lang: "ar", turns: ["وين طلبيتي؟ صرلها أسبوعين"], expect: { tools: ["get_my_orders"] }, good: "No order on this number → asks for the order number; empathetic about the wait." },
   { id: "he-order-other", category: "order", lang: "he", turns: ["מה הסטטוס של הזמנה 1001?"], expect: { tools: ["get_order_status"], forbid: [/נשלח|נמסר|בדרך|shipped|delivered/i] }, good: "Number isn't on this WhatsApp → asks for the order email; reveals nothing about the order." },
   { id: "ar-cancel", category: "order", lang: "ar", turns: ["بدي ألغي الطلب رقم 1050"], expect: { tools: ["request_order_change", "get_order_status"] }, good: "Verification first (asks for email); never says it's cancelled." },
-  { id: "mixed-broken", category: "handoff", lang: "ar", turns: ["ההזמנה שלי הגיעה שבורה!! بدي حل"], expect: { handoff: true }, good: "Empathetic, hands off to a human (damaged item), one short sentence." },
+  { id: "mixed-broken", category: "handoff", lang: "he", turns: ["ההזמנה שלי הגיעה שבורה!! بدي حل"], expect: { handoff: true }, good: "Empathetic, hands off to a human (damaged item), one short sentence." },
   { id: "ar-missing-part", category: "handoff", lang: "ar", turns: ["المنتج وصل ناقص قطعة"], expect: { handoff: true }, good: "Hands off (missing item)." },
 
   // ---------------------------------------------------------------- human / sensitive

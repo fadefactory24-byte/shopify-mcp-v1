@@ -22,6 +22,7 @@ import pino from "pino";
 import { AnthropicProvider } from "../src/agent/anthropic.js";
 import type { LLMProvider } from "../src/agent/llm.js";
 import { loadConfig } from "../src/config.js";
+import { detectLanguage } from "../src/util/text.js";
 import { buildServices } from "../src/services.js";
 import type { WhatsAppSender } from "../src/whatsapp/client.js";
 import { createTestDb } from "../test/helpers/pglite.js";
@@ -35,7 +36,7 @@ const PRICES: Record<string, [number, number, number]> = {
   "claude-sonnet-5": [2, 0.2, 10],
   "claude-haiku-4-5": [1, 0.1, 5],
 };
-const EST_USD_PER_TURN = 0.08; // rough Opus 5 figure for --dry-run; replaced by measured cost after a real run
+const EST_USD_PER_TURN = 0.025; // measured on claude-opus-5 at low effort with prompt caching (2026-09-28)
 
 const args = process.argv.slice(2);
 const flag = (name: string) => {
@@ -177,6 +178,9 @@ for (const s of scenarios) {
   for (const re of e.forbid ?? []) checks.push({ name: "forbid", pass: !re.test(allReplies), detail: String(re) });
   for (const re of e.require ?? []) checks.push({ name: "require", pass: re.test(allReplies), detail: String(re) });
   checks.push({ name: "replied", pass: allReplies.trim().length > 0 });
+  // Every reply in the customer's language (URLs carry Hebrew product handles, so strip them first).
+  const langs = turns.flatMap((t) => t.replies).map((r) => detectLanguage(r.replace(/https?:\/\/\S+/g, "")));
+  checks.push({ name: "language", pass: langs.every((l) => l === null || l === s.lang), detail: `wanted ${s.lang}, got ${langs.join(",")}` });
   checks.push({ name: "no_failed_run", pass: !turns.some((t) => t.status === "failed"), detail: turns.map((t) => t.status ?? "-").join(",") });
   const tok = turns.reduce((a, t) => ({ input: a.input + t.tokens.input, cacheRead: a.cacheRead + t.tokens.cacheRead, output: a.output + t.tokens.output }), { input: 0, cacheRead: 0, output: 0 });
   const usd = price ? (tok.input * price[0] + cacheWrites * price[0] * 1.25 + tok.cacheRead * price[1] + tok.output * price[2]) / 1e6 : 0;
