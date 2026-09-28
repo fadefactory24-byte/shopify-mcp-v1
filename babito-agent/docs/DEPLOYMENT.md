@@ -72,7 +72,7 @@ Staff keep answering from the phone app; the bot answers too and goes quiet in a
 5. Business settings → System users → the bot's user → **Assign assets** → the new WhatsApp account (messages). Then set `WHATSAPP_PHONE_NUMBER_ID` to the new id and deploy.
 6. In the WhatsApp Business app, turn off the greeting and away messages (otherwise customers get two answers).
 
-Meta lists this flow for Tech Providers; for an app onboarding its own business's number it works with standard access. Coexistence limits: 20 messages/second; some app features stop (disappearing/view-once messages, new broadcast lists, live location). To undo: in the app, Settings → Account → Business Platform → Disconnect.
+Meta documents this flow for Tech Providers; here it is used by the business's own app for its own number, so if Meta refuses it at sign-in, the fallback is Tech Provider enrollment (App dashboard → Become Tech Provider, needs business verification). Coexistence limits: 20 messages/second; some app features stop (disappearing/view-once messages, new broadcast lists, live location). To undo: in the app, Settings → Account → Business Platform → Disconnect.
 
 Send a message to the business number. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin`.
 
