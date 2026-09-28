@@ -21,10 +21,10 @@ guardrails that stop the model from inventing prices, stock, policies or order d
 ```bash
 cd babito-agent
 npm install
-npm test            # 92 tests (unit, adapters, end-to-end on real SQL via in-memory Postgres)
+npm test            # 117 tests (unit, adapters, end-to-end on real SQL via in-memory Postgres)
 cp .env.example .env
 npm run chat        # chat with the real agent in your terminal (needs ANTHROPIC_API_KEY + Shopify credentials)
-npm run eval        # scripted quality check: 41 real-world scenarios -> eval-results/<time>/report.md
+npm run eval        # scripted quality check: 50+ real-world scenarios -> eval-results/<time>/report.md (costs API credit)
 npm run dev         # run the webhook server
 ```
 

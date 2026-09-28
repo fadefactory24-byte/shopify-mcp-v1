@@ -63,6 +63,8 @@ const ConfigSchema = z.object({
   HUMAN_MODE_TIMEOUT_HOURS: int(24),
   SWEEPER_INTERVAL_MS: int(15000),
   MAX_PROCESS_ATTEMPTS: int(3),
+  /** In-process retention purge every N hours (0 = off, e.g. if an external cron calls /cron/maintenance). */
+  MAINTENANCE_INTERVAL_HOURS: int(24),
 
   // Staff notifications on handoff (both optional)
   STAFF_NOTIFY_WEBHOOK_URL: z.string().optional().default(""),

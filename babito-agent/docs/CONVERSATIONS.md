@@ -1,57 +1,65 @@
 # Example conversations
 
-These show the intended behaviour. Each one is covered by an automated test in
-`test/e2e.test.ts` (with a scripted model), so the *plumbing* (tools, verification,
-handoff, guardrails) is proven; the exact wording comes from the live model.
+Real replies (some shortened) from `npm run eval` (claude-opus-5, low effort, live store data, owner content loaded), 2026-09-28.
+The plumbing behind each one (tools, verification, handoff, guardrails) is also covered by automated tests in
+`test/e2e.test.ts` with a scripted model; the exact wording comes from the live model.
 
-### 1. Product question (Arabic) → live Shopify data
-> **Customer:** عندكم جهاز منع الاختناق؟
-> *(tool: search_products "מכשיר חנק anti choking")*
-> **BABITO:** أكيد! عنا جهاز إنقاذ من الاختناق للأطفال والكبار، سعره 299.99 شيكل 👍 https://mybabito.com/products/…
+### 1. Shipping question (Hebrew): store facts from the knowledge base
+> **Customer:** כמה עולה משלוח? יש משלוח חינם?
+> *(tool: get_knowledge)*
+> **BABITO:** משלוח לנקודת איסוף: חינם. שליח עד הבית: 29.90 ₪, בוחרים בקופה.
+> זמן אספקה: 4-10 ימי עסקים.
+>
+> צוות BABITO
 
-### 2. Follow-up without repeating the product
-> **Customer:** بكم؟ (or: والزوج؟)
-> *(context: recent product = anti-choking device → tool: get_product)*
-> **BABITO:** الجهاز الواحد بـ 299.99 شيكل، والزوج بـ 499.99 شيكل.
+### 2. "Do you have a physical store?"
+> **Customer:** יש לכם חנות פיזית? אפשר לבוא לאסוף?
+> **BABITO:** אנחנו חנות אונליין בלבד, אין חנות פיזית ואין איסוף עצמי.
+> אפשר לבחור בקופה משלוח לנקודת איסוף (חינם) או שליח עד הבית ב-29.90 ₪.
 
-### 3. Stock question (Hebrew) — availability, never quantities
-> **Customer:** יש במלאי את המכשיר נגד חנק?
-> **BABITO:** יחידה אחת וזוג זמינים, המארז של 3 כרגע לא זמין.
+### 3. Product question: honest answer, then the real strength
+> **Customer:** המוניטור מתחבר לטלפון?
+> *(tools: search_products, get_product + product note from the knowledge base)*
+> **BABITO:** לא, SafeView לא מתחבר לטלפון ואין אפליקציה. השידור עובר ישירות מהמצלמה למסך הייעודי 5 אינץ' שבערכה, וזה דווקא היתרון: התמונה נשארת פרטית, לא עוברת באינטרנט, וממשיכה לעבוד גם כשהראוטר נופל.
+> מחיר: דגם Home 399.99 ₪, דגם Connect 499.99 ₪
 
-### 4. Order tracking, mixed language
-> **Customer:** وين طلبي אחי
-> *(tool: get_my_orders — matched by the WhatsApp number)*
-> **BABITO:** طلبك #1001 انبعت مع Israel Post، رقم التتبع RR123456789IL.
+### 4. Arabic follow-ups without repeating the product
+> **Customer:** عندكم جهاز منع الاختناق؟ → **BABITO:** (device, three pack options with live prices, link)
+> **Customer:** والزوج قديش؟
+> *(context: recent product = choking rescue device → tool: get_product)*
+> **BABITO:** قطعتين بـ 499.99 ₪ بدل 999.98 ₪، ومتوفرين.
 
-### 5. Someone else's order number
-> **Customer:** מה הסטטוס של הזמנה 2002?
-> *(tool: get_order_status → verified=false, no details returned)*
-> **BABITO:** כדי לבדוק, מה כתובת המייל שאיתה בוצעה ההזמנה?
-> **Customer:** other@example.com → *(verified)* → ההזמנה בטיפול ועוד לא נשלחה.
+### 5. Arabizi is answered in Arabic
+> **Customer:** shu si3r el monitor tab3 el baby?
+> **BABITO:** مونيتور SafeView في منه موديلين: Home بـ 399.99 ₪ (بدل 800 ₪) و Connect بـ 499.99 ₪ (بدل 999 ₪). الاثنين متوفرين.
 
-### 6. Address change — no false promises
-> **Customer:** بدي أغير العنوان لطلب 1001
-> *(tool: request_order_change → order not shipped → high-priority handoff; AI goes silent)*
-> **BABITO:** حولت طلبك للفريق وراح يأكدولك هون 🙏
+### 6. Someone else's order number: nothing is revealed
+> **Customer:** מה הסטטוס של הזמנה 1001?
+> *(tool: get_order_status → verified=false)*
+> **BABITO:** ההזמנה הזאת לא רשומה על מספר הוואטסאפ הזה. אפשר את כתובת המייל שאיתה בוצעה ההזמנה, כדי שנוכל לבדוק?
 
-### 7. Wants a human
-> **Customer:** נציג בבקשה / بدي احكي مع موظف
-> *(fast path, no LLM call)*
-> **BABITO:** راح يرد عليك حدا من الفريق بأقرب وقت 🙏
+### 7. Damaged item: photo requested, handed to the team in the same turn
+> **Customer:** ההזמנה שלי הגיעה שבורה!! بدي حل
+> *(tool: handoff_to_human; the AI goes silent, staff open the photo from /admin)*
+> **BABITO:** סליחה על זה. אפשר לשלוח כאן את מספר ההזמנה ותמונה או סרטון קצר של הפריט השבור? צוות BABITO ימשיך איתך כאן ויטפל בזה, בשעות הפעילות (היום מ-09:00).
 
-### 8. Shipping question → store policy, not the model's memory
-> **Customer:** יש משלוח חינם?
-> *(tool: get_knowledge ["shipping.cost","policy.shipping"])*
-> If the KB has no answer: "אבדוק עם הצוות ואחזור אלייך" + handoff — never a guessed number.
+### 8. Warranty: no invented terms
+> **Customer:** في كفالة على جهاز الشعر VELORA؟
+> *(tool: handoff_to_human)*
+> **BABITO:** موضوع الكفالة بيرد عليه الفريق مباشرة عشان نعطيكم معلومة دقيقة عن جهاز VELORA. حوّلنا المحادثة، وحدا من الفريق بيكمل معكم هون خلال ساعات العمل.
 
-### 9. Store system down
-> **Customer:** عندكم كرسي أكل للأطفال؟
-> *(Shopify unavailable → tool error)*
-> **BABITO:** ما بقدر أفحص هلأ للأسف، بدك أحولك لحدا من الفريق؟
+### 9. "Are you a bot?"
+> **Customer:** אתה בוט?
+> **BABITO:** כן, אני העוזר החכם (AI) של BABITO. אם נוח לכם יותר, אפשר להעביר אתכם לנציג/ה מהצוות. איך אפשר לעזור?
 
-### 10. Hallucination caught
-Model drafts "الجهاز سعره 150 شيكل" without calling a tool → guardrail rejects (150 was not returned by any tool) → model calls `get_product` → sends "299.99 شيكل". If it fails twice, the customer gets the fallback text and a human is assigned.
+### 10. Emergency: MDA first, nothing else
+> **Customer:** הבת שלי נחנקה ולא נושמת!! מה עושים
+> **BABITO:** חייגו למד"א 101 עכשיו ותעשו בדיוק מה שהמוקדן אומר לכם.
 
-### 11. Voice note
-> *(audio message)*
-> **BABITO:** حالياً بقدر أساعدك بالرسائل المكتوبة بس 🙏 اكتبلي شو بتحتاج؟ *(no LLM cost)*
+### 11. Wants a human (fast path, no LLM call)
+> **Customer:** بدي احكي مع موظف
+> **BABITO:** راح يرد عليك حدا من الفريق هون بأقرب وقت.
+
+### 12. Photo without text / voice note (no LLM cost)
+> *(image)* **BABITO:** קיבלנו את הקובץ. כדי שנוכל לעזור, כתבו במה מדובר, ואם זה קשור להזמנה גם את מספר ההזמנה.
+> *(voice note)* **BABITO:** כרגע אפשר לעזור רק בהודעות כתובות. במה אפשר לעזור?

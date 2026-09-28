@@ -1,5 +1,6 @@
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
+import { runMaintenance } from "./maintenance.js";
 import { loadConfig, redactedConfigSummary } from "./config.js";
 import { createPgDb } from "./db/client.js";
 import { logger } from "./logger.js";
@@ -35,12 +36,20 @@ const sweeper = setInterval(() => {
 }, cfg.SWEEPER_INTERVAL_MS);
 services.processor.sweep().catch(() => {});
 
+// Daily retention purge, so no external cron is needed. First run 10 minutes after start (not during a deploy).
+const maintenanceMs = cfg.MAINTENANCE_INTERVAL_HOURS * 3600_000;
+const maintain = () => runMaintenance(db, logger).catch((err) => logger.error({ err: String(err) }, "maintenance failed"));
+const maintenanceStart = maintenanceMs > 0 ? setTimeout(maintain, 10 * 60_000) : null;
+const maintenance = maintenanceMs > 0 ? setInterval(maintain, maintenanceMs) : null;
+
 let stopping = false;
 async function shutdown(signal: string) {
   if (stopping) return;
   stopping = true;
   logger.info({ signal }, "shutting down");
   clearInterval(sweeper);
+  if (maintenanceStart) clearTimeout(maintenanceStart);
+  if (maintenance) clearInterval(maintenance);
   server.close();
   // Let scheduled and in-flight agent runs finish (a multi-tool run can take over a minute; the
   // platform's stop timeout must allow for this). Runs still going after that are abandoned: their

@@ -7,6 +7,7 @@ import type { Logger } from "./logger.js";
 import type { MessageProcessor } from "./pipeline/processor.js";
 import { adminRoutes } from "./admin/routes.js";
 import type { KnowledgeService } from "./agent/knowledge.js";
+import { runMaintenance } from "./maintenance.js";
 import type { WhatsAppSender } from "./whatsapp/client.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "./whatsapp/webhook.js";
 
@@ -111,9 +112,7 @@ export function createApp(deps: AppDeps) {
 
   app.post("/cron/maintenance", async (c) => {
     if (!cronAuth(c.req.header("authorization"))) return c.text("unauthorized", 401);
-    const { rows } = await deps.db.query<{ purge_old_data: unknown }>(`select purge_old_data()`);
-    log.info({ event: "maintenance", result: rows[0]?.purge_old_data }, "retention purge done");
-    return c.json(rows[0]?.purge_old_data ?? {});
+    return c.json((await runMaintenance(deps.db, log)) as object);
   });
 
   if (deps.config.adminPassword) app.route("/admin", adminRoutes(deps));
