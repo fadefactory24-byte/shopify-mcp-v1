@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { runAgent, type AgentDeps } from "../agent/agent.js";
 import { isExplicitHumanRequest } from "../agent/guardrails.js";
 import { maybeSummarize } from "../agent/memory.js";
@@ -20,8 +21,10 @@ export interface ProcessorConfig {
   fastModel: string;
 }
 
-// Must exceed the worst-case agent run (iterations × model timeout) so no second worker steals the batch.
+// The holder renews its lease every LEASE_RENEW_MS, so a long run never loses it; it only
+// expires when the worker died (the sweeper then re-queues the messages).
 const LEASE_SECONDS = 300;
+const LEASE_RENEW_MS = 60_000;
 const MAX_DEBOUNCE_MS = 8000;
 
 /**
@@ -36,6 +39,8 @@ const MAX_DEBOUNCE_MS = 8000;
 export class MessageProcessor {
   private timers = new Map<string, { timer: NodeJS.Timeout; firstAt: number }>();
   private inflight = new Set<Promise<void>>();
+  /** Leases this process holds right now: conversation id -> lease owner. */
+  private leases = new Map<string, string>();
 
   constructor(
     private readonly deps: AgentDeps & { whatsapp: WhatsAppSender },
@@ -162,23 +167,60 @@ export class MessageProcessor {
     this.timers.clear();
   }
 
+  /**
+   * Shutdown, after drain(): runs still in flight will not finish in this process. Re-queue their
+   * messages and free their leases so the next instance answers them without waiting for expiry.
+   */
+  async releaseLeases() {
+    for (const [conversationId, owner] of this.leases) {
+      try {
+        await repo.requeueProcessingInbound(this.db, conversationId);
+        await repo.releaseConversation(this.db, conversationId, owner);
+      } catch (err) {
+        this.log.warn({ err: String(err), conversationId }, "could not release lease on shutdown");
+      }
+    }
+    this.leases.clear();
+  }
+
   // -------------------------------------------------------------------- process
 
   async processConversation(conversationId: string): Promise<void> {
-    if (!(await repo.claimConversation(this.db, conversationId, LEASE_SECONDS))) {
+    const owner = randomUUID();
+    if (!(await repo.claimConversation(this.db, conversationId, owner, LEASE_SECONDS))) {
       this.log.debug({ conversationId }, "conversation busy; the lease holder will pick up new messages");
       return;
     }
+    this.leases.set(conversationId, owner);
+    const renew = setInterval(() => {
+      repo
+        .extendLease(this.db, conversationId, owner, LEASE_SECONDS)
+        .then((held) => {
+          if (!held) this.log.warn({ event: "lease_lost", conversationId }, "processing lease taken over by another worker");
+        })
+        .catch((err) => this.log.warn({ err: String(err), conversationId }, "lease renewal failed"));
+    }, LEASE_RENEW_MS);
+    let failed = false;
     try {
       for (let round = 0; round < 5; round++) {
+        if (!(await repo.extendLease(this.db, conversationId, owner, LEASE_SECONDS))) break; // lost it: the new holder takes over
         const pending = await repo.claimPendingInbound(this.db, conversationId);
         if (pending.length === 0) break;
-        await repo.extendLease(this.db, conversationId, LEASE_SECONDS);
-        await this.handleBatch(conversationId, pending);
+        try {
+          await this.handleBatch(conversationId, pending);
+        } catch (err) {
+          failed = true;
+          await this.batchFailed(conversationId, pending, err);
+          break;
+        }
       }
     } finally {
-      await repo.releaseConversation(this.db, conversationId);
+      clearInterval(renew);
+      this.leases.delete(conversationId);
+      await repo.releaseConversation(this.db, conversationId, owner);
     }
+    // The sweeper retries a failed batch shortly; rescheduling now would spin on a persistent error.
+    if (failed) return;
     // A message may have landed between our last check and releasing the lease.
     const { rows } = await this.db.query(
       `select 1 from messages where conversation_id = $1 and direction = 'inbound' and status = 'received' limit 1`,
@@ -345,6 +387,53 @@ export class MessageProcessor {
     ).catch(() => {});
   }
 
+  /**
+   * handleBatch threw (DB error, bug...). Put the batch straight back in the queue for the sweeper
+   * to retry, or give up once it has used its attempts (counted when claimed). Never throws.
+   */
+  private async batchFailed(conversationId: string, pending: MessageRow[], err: unknown) {
+    const ids = pending.map((p) => p.id);
+    const attempts = Math.max(...pending.map((p) => p.attempts));
+    const error = String(err);
+    const exhausted = attempts >= this.cfg.maxAttempts;
+    this.log.error({ event: "batch_failed", conversationId, attempts, exhausted, err: error }, "processing a batch failed");
+    try {
+      if (!exhausted) {
+        await repo.failUnfinishedRuns(this.db, ids, error);
+        await repo.releaseFailedBatch(this.db, ids, "received", error);
+      } else if (await repo.releaseFailedBatch(this.db, ids, "failed", "max attempts exceeded")) {
+        await this.giveUp(conversationId, ids, error);
+      }
+    } catch (e) {
+      this.log.error({ conversationId, err: String(e) }, "could not record the failed batch");
+    }
+  }
+
+  /**
+   * Messages ran out of attempts. Fail closed like a failed AI run (handoff text to the customer,
+   * chat to staff) instead of dropping them silently. Best-effort: never throws.
+   */
+  private async giveUp(conversationId: string, ids: string[], error: string) {
+    try {
+      await repo.failUnfinishedRuns(this.db, ids, error);
+      const conv = await repo.getConversation(this.db, conversationId);
+      const customer = conv && (await repo.getCustomer(this.db, conv.customer_id));
+      const settings = await this.deps.knowledge.settings();
+      // Staff already own the chat, or the bot must stay quiet.
+      if (!conv || !customer || conv.mode !== "ai" || customer.is_blocked || !settings.botEnabled) return;
+      const lang = conv.language ?? customer.preferred_language ?? "he";
+      await this.sendReply(conv, customer, settings.handoffExpectation[lang] ?? settings.handoffExpectation.he!, null, "system");
+      await performHandoff(this.handoffDeps(), {
+        ...this.handoffBase(conv, customer),
+        reason: "processing_error",
+        summary: `Could not process the customer's messages after ${this.cfg.maxAttempts} attempts (${truncate(error, 200)})`,
+        createdBy: "system",
+      });
+    } catch (err) {
+      this.log.error({ event: "give_up_failed", conversationId, err: String(err) }, "could not hand off a failed batch");
+    }
+  }
+
   private handoffDeps() {
     return { db: this.db, notifier: this.deps.notifier, log: this.log };
   }
@@ -393,8 +482,10 @@ export class MessageProcessor {
   }
 
   private async sweepOnce() {
-    const convs = await repo.conversationsNeedingWork(this.db, 10, this.cfg.maxAttempts);
-    for (const id of convs) this.schedule(id, 0);
+    const { ready, exhausted } = await repo.conversationsNeedingWork(this.db, 10, this.cfg.maxAttempts);
+    for (const id of ready) this.schedule(id, 0);
+    // Every attempt died mid-run (crash, restart) without recording a failure.
+    for (const e of exhausted) await this.giveUp(e.conversationId, e.ids, "processing never completed (max attempts exceeded)");
 
     for (const m of await repo.failedOutboundToRetry(this.db, this.cfg.maxAttempts)) {
       try {
@@ -405,7 +496,7 @@ export class MessageProcessor {
         await repo.markOutboundFailed(this.db, m.id, (err as Error).message);
       }
     }
-    return { rescheduled: convs.length };
+    return { rescheduled: ready.length };
   }
 }
 

@@ -44,6 +44,7 @@ After migrating, in the Supabase Table Editor:
 3. Generate a public domain, e.g. `https://babito-agent.up.railway.app`. Check `GET /health` → `{"ok":true}`.
 4. Run migrations once **from your machine** with the production `DATABASE_URL` (`DATABASE_URL=... npm run db:migrate`), or apply the files in `supabase/migrations/` through Supabase. The production image doesn't include `tsx` or `scripts/`, so `npm run db:migrate` can't run inside it.
 5. Run **one instance** to start. Multiple instances are safe (DB lease + idempotency), but one is enough for this volume.
+6. Give the service a **stop timeout of at least 90s** (Railway: `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`; Fly: `kill_timeout`; Docker: `stop_grace_period`). On SIGTERM the server waits up to 90s for in-flight replies before exiting.
 
 ## 5. Connect WhatsApp
 
@@ -64,7 +65,7 @@ curl -X POST https://<your-domain>/cron/maintenance -H "Authorization: Bearer $C
 
 ## 7. Monitoring
 
-- **Logs** (JSON): filter by `event` — `message_received`, `agent_run` (status, tools, tokens, latency, flags), `tool_call`, `handoff`, `message_sent`, `send_failed`, `delivery_failed`, `guardrail`, `webhook_bad_signature`, `rate_limited`.
+- **Logs** (JSON): filter by `event` — `message_received`, `agent_run` (status, tools, tokens, latency, flags), `tool_call`, `handoff`, `message_sent`, `send_failed`, `delivery_failed`, `guardrail`, `webhook_bad_signature`, `rate_limited`, `batch_failed`, `lease_lost`.
 - **Dashboard** `/admin`: 24h counters (runs, failures, tool failures, send failures, open handoffs, tokens, latency), conversations, per-run tool calls and errors.
 - **Alert on**: `agent_runs.status = 'failed'` spikes, `send_failed`, `delivery_failed` with code 131047 (outside 24h window), `/health` non-200.
 - **Cost**: tokens per run are stored in `agent_runs` (`input_tokens`, `cache_read_tokens`, `output_tokens`). A healthy cache ratio means `cache_read_tokens` ≈ most of the input.

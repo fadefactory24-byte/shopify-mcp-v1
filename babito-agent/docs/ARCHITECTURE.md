@@ -101,8 +101,9 @@ No store facts live in the prompt — prices, policies and shipping times are al
 |---|---|
 | Duplicate webhook | Unique `wa_message_id` → second insert is a no-op |
 | Webhook burst | Debounced into one agent run |
-| Two instances / concurrent webhooks | Conversation lease (`processing_until`) — only one processor at a time |
-| Crash mid-processing | Lease expires → sweeper resets messages to `received` → reprocessed (max 3 attempts) |
+| Two instances / concurrent webhooks | Conversation lease (`processing_until`, `processing_owner`) — only one processor at a time; renewed every 60s during a run, extended/released only by its owner |
+| Error while processing a batch | Messages go straight back to `received`; the sweeper retries them (max 3 attempts), then the customer gets the handoff text and staff get the chat |
+| Crash mid-processing | Lease expires → sweeper resets messages to `received` → reprocessed (max 3 attempts, then handoff as above). On SIGTERM, runs still going after 90s are re-queued and their leases released |
 | Shopify down / throttled | 2 retries with backoff; then the tool returns `store_system_unavailable` and the model says it can't check now |
 | Claude down / refusal / guardrail fails twice | Fail closed: fallback text + human handoff; nothing invented |
 | WhatsApp send fails | Stored as `failed`; sweeper retries within 3 minutes (stale replies are not resent) |

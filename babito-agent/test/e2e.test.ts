@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { repo } from "../src/db/repo.js";
 import { callTool, CHOKING_ID, CUSTOMER_PHONE, lastToolResults, mediaWebhook, refuse, say, statusWebhook, textWebhook } from "./helpers/fakes.js";
 import { createHarness, type Harness } from "./helpers/harness.js";
 
@@ -7,6 +9,8 @@ beforeEach(async () => {
   h = await createHarness();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   h.processor.stopTimers();
   await h.db.close();
 });
@@ -412,5 +416,100 @@ describe("conversations", () => {
     await h.processor.sweep();
     await h.processor.drain();
     expect(lastSent()!.body).toBe("שלום!");
+  });
+});
+
+describe("pipeline reliability", () => {
+  /** Let the sweeper see the queued messages (it skips ones younger than 10s), then run it. */
+  async function sweepNow() {
+    await h.db.query(`update messages set created_at = now() - interval '1 minute' where direction = 'inbound'`);
+    await h.processor.sweep();
+    await h.processor.drain();
+  }
+
+  it("leases are owner-aware: a worker cannot extend or clear another worker's lease", async () => {
+    await h.processor.ingest([{ waMessageId: "wamid.lease", from: CUSTOMER_PHONE, profileName: null, timestamp: null, type: "text", text: "היי", media: null, phoneNumberId: "PNID" }]);
+    h.processor.stopTimers();
+    const [conv] = await h.q("select id from conversations");
+    const [a, b] = [randomUUID(), randomUUID()];
+    expect(await repo.claimConversation(h.db, conv.id, a, 300)).toBe(true);
+    expect(await repo.claimConversation(h.db, conv.id, b, 300)).toBe(false);
+    expect(await repo.extendLease(h.db, conv.id, b, 300)).toBe(false);
+    await repo.releaseConversation(h.db, conv.id, b);
+    expect((await h.q("select processing_owner from conversations"))[0].processing_owner).toBe(a);
+    await repo.releaseConversation(h.db, conv.id, a);
+    expect(await repo.claimConversation(h.db, conv.id, b, 300)).toBe(true);
+  });
+
+  it("a run longer than the lease renews it, so a second worker cannot take the conversation", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    h.llm.push(async (req) => {
+      const [conv] = await h.q("select id, processing_owner from conversations");
+      // Simulate a long run: the lease is about to lapse when the renewal timer fires.
+      await h.q("update conversations set processing_until = now() - interval '1 second' where id = $1", [conv.id]);
+      vi.advanceTimersByTime(60_000);
+      for (let i = 0; i < 50 && !(await h.q("select processing_until > now() as held from conversations"))[0].held; i++) await new Promise((r) => setTimeout(r, 10));
+      await h.processor.processConversation(conv.id); // another worker
+      expect((await h.q("select processing_owner from conversations"))[0].processing_owner).toBe(conv.processing_owner);
+      return say("שלום!")(req);
+    });
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(h.llm.requests).toHaveLength(1);
+    expect(h.whatsapp.sent.map((s) => s.body)).toEqual(["שלום!"]); // in-step expectations held (a failure there means the fallback)
+    expect((await h.q("select processing_until, processing_owner from conversations"))[0]).toEqual({ processing_until: null, processing_owner: null });
+  });
+
+  it("a batch that throws goes straight back to the queue and the sweeper retries it", async () => {
+    vi.spyOn(repo, "finishRun").mockRejectedValueOnce(new Error("db blip"));
+    h.llm.push(say("ניסיון ראשון"), say("שלום!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(h.whatsapp.sent).toHaveLength(0);
+    expect((await h.q("select status, attempts from messages where direction='inbound'"))[0]).toEqual({ status: "received", attempts: 1 });
+    expect((await h.q("select status from agent_runs"))[0].status).toBe("failed"); // not left 'running'
+    expect((await h.q("select processing_until from conversations"))[0].processing_until).toBeNull();
+
+    await sweepNow();
+    expect(h.whatsapp.sent.map((s) => s.body)).toEqual(["שלום!"]);
+    expect((await h.q("select status, attempts from messages where direction='inbound'"))[0]).toEqual({ status: "processed", attempts: 2 });
+  });
+
+  it("after MAX_PROCESS_ATTEMPTS failures the customer gets the handoff text and staff get the chat", async () => {
+    vi.spyOn(repo, "finishRun").mockRejectedValue(new Error("db blip"));
+    h.llm.push(say("a"), say("b"), say("c"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "مرحبا"));
+    await sweepNow();
+    await sweepNow();
+    expect((await h.q("select status, attempts, error from messages where direction='inbound'"))[0]).toEqual({ status: "failed", attempts: 3, error: "max attempts exceeded" });
+    expect(h.whatsapp.sent).toHaveLength(1);
+    expect(h.whatsapp.sent[0]!.body).toContain("الفريق"); // Arabic handoff text
+    expect(await h.q("select status from agent_runs")).toEqual([{ status: "failed" }, { status: "failed" }, { status: "failed" }]);
+    expect((await h.q("select reason from handoffs"))[0].reason).toBe("processing_error");
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("human");
+    expect(h.notifier.notices).toHaveLength(1);
+
+    await sweepNow(); // nothing left to retry or announce
+    expect(h.whatsapp.sent).toHaveLength(1);
+  });
+
+  it("messages whose worker died on every attempt are handed off by the sweeper, not dropped", async () => {
+    await h.processor.ingest([{ waMessageId: "wamid.dead", from: CUSTOMER_PHONE, profileName: null, timestamp: null, type: "text", text: "היי", media: null, phoneNumberId: "PNID" }]);
+    h.processor.stopTimers();
+    await h.db.query(`update messages set attempts = 3`); // three claims, each worker crashed
+    await sweepNow();
+    expect((await h.q("select status from messages where direction='inbound'"))[0].status).toBe("failed");
+    expect(h.whatsapp.sent).toHaveLength(1);
+    expect((await h.q("select reason from handoffs"))[0].reason).toBe("processing_error");
+    expect(h.llm.requests).toHaveLength(0);
+  });
+
+  it("shutdown re-queues runs that outlive the drain and releases their leases", async () => {
+    h.llm.push(async (req) => {
+      await h.processor.releaseLeases(); // shutdown gave up waiting for this run
+      expect((await h.q("select status from messages where direction='inbound'"))[0].status).toBe("received");
+      expect((await h.q("select processing_until, processing_owner from conversations"))[0]).toEqual({ processing_until: null, processing_owner: null });
+      return say("שלום!")(req);
+    });
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(lastSent()!.body).toBe("שלום!"); // in-step expectations held
   });
 });

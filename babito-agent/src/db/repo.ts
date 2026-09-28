@@ -132,23 +132,30 @@ export const repo = {
     await db.query(`update conversations set ${col} = now(), last_message_at = now() where id = $1`, [id]);
   },
 
-  /** Acquire the per-conversation processing lease. Returns false if someone else holds it. */
-  async claimConversation(db: Db, id: string, leaseSeconds: number): Promise<boolean> {
+  /** Acquire the per-conversation processing lease for `owner`. Returns false if someone else holds it. */
+  async claimConversation(db: Db, id: string, owner: string, leaseSeconds: number): Promise<boolean> {
     const { rows } = await db.query(
-      `update conversations set processing_until = now() + make_interval(secs => $2)
+      `update conversations set processing_until = now() + make_interval(secs => $3), processing_owner = $2
        where id = $1 and (processing_until is null or processing_until < now())
        returning id`,
-      [id, leaseSeconds],
+      [id, owner, leaseSeconds],
     );
     return rows.length > 0;
   },
 
-  async extendLease(db: Db, id: string, leaseSeconds: number) {
-    await db.query(`update conversations set processing_until = now() + make_interval(secs => $2) where id = $1`, [id, leaseSeconds]);
+  /** Returns false if `owner` no longer holds the lease (it expired and another worker took it). */
+  async extendLease(db: Db, id: string, owner: string, leaseSeconds: number): Promise<boolean> {
+    const { rows } = await db.query(
+      `update conversations set processing_until = now() + make_interval(secs => $3)
+       where id = $1 and processing_owner = $2
+       returning id`,
+      [id, owner, leaseSeconds],
+    );
+    return rows.length > 0;
   },
 
-  async releaseConversation(db: Db, id: string) {
-    await db.query(`update conversations set processing_until = null where id = $1`, [id]);
+  async releaseConversation(db: Db, id: string, owner: string) {
+    await db.query(`update conversations set processing_until = null, processing_owner = null where id = $1 and processing_owner = $2`, [id, owner]);
   },
 
   async updateConversationContext(db: Db, id: string, context: ConversationContext) {
@@ -258,6 +265,25 @@ export const repo = {
     await db.query(`update messages set status = $2, error = $3 where id = any($1::uuid[])`, [ids, status, error ?? null]);
   },
 
+  /**
+   * A batch threw: move its rows to 'received' (retry) or 'failed' (give up). Only rows still
+   * 'processing' move, so a batch that already replied and marked itself processed is not answered
+   * twice. Returns how many rows moved.
+   */
+  async releaseFailedBatch(db: Db, ids: string[], status: "received" | "failed", error: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const { rows } = await db.query(
+      `update messages set status = $2, error = $3 where id = any($1::uuid[]) and status = 'processing' returning id`,
+      [ids, status, error.slice(0, 500)],
+    );
+    return rows.length;
+  },
+
+  /** Shutdown: re-queue a conversation whose run will not finish in this process. */
+  async requeueProcessingInbound(db: Db, conversationId: string) {
+    await db.query(`update messages set status = 'received' where conversation_id = $1 and direction = 'inbound' and status = 'processing'`, [conversationId]);
+  },
+
   async linkInboundToRun(db: Db, ids: string[], runId: string) {
     if (ids.length === 0) return;
     await db.query(`update messages set agent_run_id = $2 where id = any($1::uuid[])`, [ids, runId]);
@@ -285,8 +311,15 @@ export const repo = {
   },
 
   // ----------------------------------------------------------------- recovery
-  /** Conversations with inbound messages that should have been processed by now. */
-  async conversationsNeedingWork(db: Db, olderThanSeconds: number, maxAttempts: number): Promise<string[]> {
+  /**
+   * Conversations with inbound messages that should have been processed by now (`ready`), and
+   * messages that just ran out of attempts (`exhausted`, marked failed here; the caller tells the customer).
+   */
+  async conversationsNeedingWork(
+    db: Db,
+    olderThanSeconds: number,
+    maxAttempts: number,
+  ): Promise<{ ready: string[]; exhausted: { conversationId: string; ids: string[] }[] }> {
     // Stale 'processing' rows (worker crashed and its lease expired) go back to 'received'.
     await db.query(
       `update messages m set status = 'received'
@@ -296,9 +329,13 @@ export const repo = {
          and m.updated_at < now() - interval '5 minutes'`,
     );
     // Give up after maxAttempts.
-    await db.query(
-      `update messages set status = 'failed', error = 'max attempts exceeded'
-       where direction = 'inbound' and status = 'received' and attempts >= $1`,
+    const exhausted = await db.query<{ conversation_id: string; ids: string[] }>(
+      `with failed as (
+         update messages set status = 'failed', error = 'max attempts exceeded'
+         where direction = 'inbound' and status = 'received' and attempts >= $1
+         returning id, conversation_id
+       )
+       select conversation_id, array_agg(id)::text[] as ids from failed group by conversation_id`,
       [maxAttempts],
     );
     const { rows } = await db.query<{ conversation_id: string }>(
@@ -307,7 +344,10 @@ export const repo = {
        limit 50`,
       [olderThanSeconds],
     );
-    return rows.map((r) => r.conversation_id);
+    return {
+      ready: rows.map((r) => r.conversation_id),
+      exhausted: exhausted.rows.map((r) => ({ conversationId: r.conversation_id, ids: r.ids })),
+    };
   },
 
   /** Recent failed outbound replies worth retrying (only very fresh ones — stale replies confuse customers). */
@@ -338,6 +378,16 @@ export const repo = {
          latency_ms = $7, reply_text = $8, guardrail_flags = $9, error = $10, finished_at = now()
        where id = $1`,
       [id, r.status, r.iterations, r.inputTokens, r.outputTokens, r.cacheReadTokens, r.latencyMs, r.replyText, r.flags, r.error ?? null],
+    );
+  },
+
+  /** A batch threw mid-run: close the run it started (if any) instead of leaving it 'running' forever. */
+  async failUnfinishedRuns(db: Db, messageIds: string[], error: string) {
+    if (messageIds.length === 0) return;
+    await db.query(
+      `update agent_runs set status = 'failed', error = $2, finished_at = now()
+       where status = 'running' and id in (select agent_run_id from messages where id = any($1::uuid[]))`,
+      [messageIds, error.slice(0, 500)],
     );
   },
 

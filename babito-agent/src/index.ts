@@ -34,13 +34,20 @@ const sweeper = setInterval(() => {
 }, cfg.SWEEPER_INTERVAL_MS);
 services.processor.sweep().catch(() => {});
 
+let stopping = false;
 async function shutdown(signal: string) {
+  if (stopping) return;
+  stopping = true;
   logger.info({ signal }, "shutting down");
   clearInterval(sweeper);
   server.close();
-  // Let in-flight replies finish; unprocessed messages stay 'received' and the next instance picks them up.
-  await services.processor.drain(20_000);
+  // Let scheduled and in-flight agent runs finish (a multi-tool run can take over a minute; the
+  // platform's stop timeout must allow for this). Runs still going after that are abandoned: their
+  // messages go back to 'received' and their leases are released, so the next instance's sweeper
+  // answers them within seconds instead of after lease expiry.
+  await services.processor.drain(90_000);
   services.processor.stopTimers();
+  await services.processor.releaseLeases();
   await db.close();
   process.exit(0);
 }
