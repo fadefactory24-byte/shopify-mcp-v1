@@ -42,12 +42,12 @@ After migrating, in the Supabase Table Editor:
 
 ## 4. Deploy (Railway example; Fly.io / Render are equivalent)
 
-1. New project → Deploy from GitHub repo → set **root directory** to `babito-agent`. `babito-agent/railway.json` sets the Dockerfile build, `/health` check, restart policy, one replica and a 100s draining time (if Railway doesn't pick it up, set the service's config file path to `/babito-agent/railway.json`).
-2. Variables → Raw Editor: paste all variables (template with generated secrets: `private/railway.env`; reference: `.env.example`). Production refuses to start without `WHATSAPP_APP_SECRET`, `ADMIN_PASSWORD` (≥12 chars) and `ANTHROPIC_API_KEY`.
+1. New project → Deploy from GitHub repo → set **root directory** to `/babito-agent` (it has its own `Dockerfile`). Service settings: health check `/health` (60s), restart on failure (10 retries), 1 replica in **EU West**, variable `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`.
+2. Variables → Raw Editor: add the variables (reference: `.env.example`). Tip: set `DATABASE_URL=postgresql://postgres.<ref>:${{DB_PASSWORD}}@<pooler-host>:5432/postgres` and paste only the password into `DB_PASSWORD`. Production refuses to start without `WHATSAPP_APP_SECRET`, `ADMIN_PASSWORD` (≥12 chars) and `ANTHROPIC_API_KEY`.
 3. Generate a public domain, e.g. `https://babito-agent.up.railway.app`. Check `GET /health` → `{"ok":true}`.
 4. Run migrations once **from your machine** with the production `DATABASE_URL` (`DATABASE_URL=... npm run db:migrate`), or apply the files in `supabase/migrations/` through Supabase. The production image doesn't include `tsx` or `scripts/`, so `npm run db:migrate` can't run inside it.
 5. Run **one instance** to start. Multiple instances are safe (DB lease + idempotency), but one is enough for this volume.
-6. Give the service a **stop timeout of at least 90s** (Railway: `drainingSeconds` in `railway.json`; Fly: `kill_timeout`; Docker: `stop_grace_period`). On SIGTERM the server waits up to 90s for in-flight replies before exiting.
+6. Give the service a **stop timeout of at least 90s** (Railway: `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`; Fly: `kill_timeout`; Docker: `stop_grace_period`). On SIGTERM the server waits up to 90s for in-flight replies before exiting.
 
 ## 5. Connect WhatsApp
 
