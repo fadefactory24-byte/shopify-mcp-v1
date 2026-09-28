@@ -730,6 +730,23 @@ describe("admin: Embedded Signup diagnostics", () => {
       wabas: [{ id: "444000", name: "Test WhatsApp Business Account", numbers: [{ id: "555000", display_phone_number: "+1 555-159-3890", platform_type: "CLOUD_API", is_on_biz_app: false }] }],
     });
     expect(calls.some((c) => c.includes("subscribed_apps"))).toBe(false);
+
+    // A plain JS SDK sign-in code only exchanges with an empty redirect_uri: retried once.
+    const exchanges: string[] = [];
+    h.setMetaFetch(async (input) => {
+      const url = String(input);
+      if (url.includes("/oauth/access_token")) {
+        exchanges.push(url);
+        return url.includes("redirect_uri=")
+          ? new Response(JSON.stringify({ access_token: "t" }), { status: 200 })
+          : new Response(JSON.stringify({ error: { message: "Error validating verification code. Please make sure your redirect_uri is identical" } }), { status: 400 });
+      }
+      return new Response(JSON.stringify(url.includes("/debug_token") ? { data: { scopes: ["public_profile"] } } : {}), { status: 200 });
+    });
+    const retried = await h.app.request("http://localhost/admin/whatsapp-connect/inspect", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ code: "js-sdk-code" }) });
+    expect(await retried.json()).toEqual({ scopes: ["public_profile"], wabas: [] });
+    expect(exchanges).toHaveLength(2);
+    expect(exchanges[1]).toMatch(/&redirect_uri=$/);
     expect((await h.app.request("http://localhost/admin/whatsapp-connect/inspect", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: "{}" })).status).toBe(400);
   });
 });

@@ -47,9 +47,21 @@ async function graph(fetchImpl: typeof fetch, url: string, init: RequestInit = {
   return json;
 }
 
+/**
+ * Embedded Signup codes exchange without a redirect_uri. A plain JavaScript SDK sign-in code (what Meta
+ * returns when it skips the WhatsApp screens) only exchanges with an empty redirect_uri, so retry once.
+ */
 async function exchangeCode(cfg: ConnectConfig, code: string, fetchImpl: typeof fetch): Promise<string> {
-  const exchange = new URLSearchParams({ client_id: cfg.appId, client_secret: cfg.appSecret, code });
-  const { access_token: token } = await graph(fetchImpl, `https://graph.facebook.com/${cfg.graphVersion}/oauth/access_token?${exchange}`);
+  const url = (extra: Record<string, string>) =>
+    `https://graph.facebook.com/${cfg.graphVersion}/oauth/access_token?${new URLSearchParams({ client_id: cfg.appId, client_secret: cfg.appSecret, code, ...extra })}`;
+  let res: any;
+  try {
+    res = await graph(fetchImpl, url({}));
+  } catch (err) {
+    if (!(err instanceof ConnectError) || !/redirect_uri/i.test(err.message)) throw err;
+    res = await graph(fetchImpl, url({ redirect_uri: "" }));
+  }
+  const token = res?.access_token;
   if (typeof token !== "string" || !token) throw new ConnectError("Meta did not return a business token");
   return token;
 }
