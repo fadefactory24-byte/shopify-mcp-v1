@@ -69,7 +69,7 @@ which keeps the MVP simple and fully recoverable after a crash.
 5. **Business knowledge** — `kb_articles` + live Shopify policies, fetched on demand via `get_knowledge`; only a key/title index sits in the prompt.
 6. **System settings** — `settings`.
 
-Retention: `purge_old_data()` (called by `POST /cron/maintenance`) deletes tool calls/runs > 60 days, messages > 180 days, expired memories, and closes stale conversations. "Forget customer" in the dashboard wipes memories and message texts.
+Retention: `purge_old_data()` (called by `POST /cron/maintenance`) deletes tool calls/runs > 60 days, messages > 180 days, expired memories, and closes stale conversations (resolving their open handoffs). "Forget customer" in the dashboard wipes memories and message texts, plus tool-call inputs/outputs, AI reply texts and handoff summaries.
 
 ## Prompt architecture (token-efficient, cache-friendly)
 

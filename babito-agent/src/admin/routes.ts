@@ -233,12 +233,17 @@ export function adminRoutes(deps: AppDeps) {
     return c.redirect(`/admin`);
   });
 
-  /** Privacy request: delete memories and message texts; keep row skeletons for stats. */
+  /** Privacy request: delete memories and every stored text about the customer; keep row skeletons for stats. */
   r.post("/customers/:id/forget", async (c) => {
     const id = c.req.param("id");
     await db.tx(async (tx) => {
+      const convs = `select id from conversations where customer_id = $1`;
       await repo.deleteMemories(tx, id);
       await tx.query(`update messages set body = null, media = null where customer_id = $1`, [id]);
+      // Tool inputs/outputs can hold the order email, handoff summaries and AI replies quote the customer.
+      await tx.query(`update tool_calls set input = null, output = null where conversation_id in (${convs})`, [id]);
+      await tx.query(`update agent_runs set reply_text = null where conversation_id in (${convs})`, [id]);
+      await tx.query(`update handoffs set summary = null where customer_id = $1`, [id]);
       await tx.query(`update conversations set summary = null, context = '{}'::jsonb where customer_id = $1`, [id]);
       await tx.query(`update customers set display_name = null, shopify_customer_id = null, deleted_at = now() where id = $1`, [id]);
       await repo.audit(tx, "admin", "forget_customer", "customer", id);

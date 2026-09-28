@@ -444,6 +444,45 @@ describe("conversations", () => {
   });
 });
 
+describe("privacy & retention", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+
+  it("forget customer scrubs the order email and customer texts from tool calls, AI runs and handoffs", async () => {
+    h.llm.push(callTool("get_order_status", { order_number: "#2002", email: "other@example.com" }), say("ההזמנה בטיפול ועוד לא נשלחה."));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "הזמנה 2002 other@example.com"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "נציג בבקשה")); // handoff summary quotes the customer
+    expect(JSON.stringify(await h.q("select input from tool_calls"))).toContain("other@example.com");
+
+    const [customer] = await h.q("select id from customers");
+    const res = await h.app.request(`http://localhost/admin/customers/${customer.id}/forget`, { method: "POST", headers: auth });
+    expect(res.status).toBe(302);
+    expect(await h.q("select input, output from tool_calls")).toEqual([{ input: null, output: null }]);
+    expect(await h.q("select reply_text from agent_runs")).toEqual([{ reply_text: null }]);
+    expect(await h.q("select summary from handoffs")).toEqual([{ summary: null }]);
+    for (const table of ["messages", "tool_calls", "agent_runs", "handoffs", "conversations", "customers"]) {
+      const dump = JSON.stringify(await h.q(`select * from ${table}`));
+      expect(dump, table).not.toContain("other@example.com");
+      expect(dump, table).not.toContain("נציג בבקשה");
+    }
+  });
+
+  it("retention purge resolves the open handoffs of the stale conversations it closes", async () => {
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "بدي احكي مع موظف"));
+    await h.q("update conversations set last_message_at = now() - interval '31 days'");
+    await h.customerSays(textWebhook("972529999999", "بدي احكي مع موظف")); // recent: must stay open
+
+    const res = await h.app.request("/cron/maintenance", { method: "POST", headers: { Authorization: "Bearer cron-secret" } });
+    expect(res.status).toBe(200);
+    const rows = await h.q(
+      `select c.status as conv, h.status as handoff, h.claimed_by from handoffs h join conversations c on c.id = h.conversation_id join customers cu on cu.id = c.customer_id order by cu.wa_id`,
+    );
+    expect(rows).toEqual([
+      { conv: "closed", handoff: "resolved", claimed_by: "system:retention" }, // CUSTOMER_PHONE, stale
+      { conv: "open", handoff: "open", claimed_by: null },
+    ]);
+  });
+});
+
 describe("pipeline reliability", () => {
   /** Let the sweeper see the queued messages (it skips ones younger than 10s), then run it. */
   async function sweepNow() {
