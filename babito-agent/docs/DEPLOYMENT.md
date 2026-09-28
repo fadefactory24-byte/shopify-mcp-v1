@@ -42,7 +42,7 @@ After migrating, in the Supabase Table Editor:
 
 ## 4. Deploy (Railway example; Fly.io / Render are equivalent)
 
-1. New project → Deploy from GitHub repo → set **root directory** to `/babito-agent` (it has its own `Dockerfile`). Service settings: health check `/health` (60s), restart on failure (10 retries), 1 replica in **EU West**, variable `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`.
+1. New project → Deploy from GitHub repo → set **root directory** to `/babito-agent` (it has its own `Dockerfile`) and the **branch** you deploy from (Railway otherwise builds the repo's default branch). Service settings: health check `/health` (60s), restart on failure (10 retries), 1 replica in **EU West**, variable `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`.
 2. Variables → Raw Editor: add the variables (reference: `.env.example`). Tip: set `DATABASE_URL=postgresql://postgres.<ref>:${{DB_PASSWORD}}@<pooler-host>:5432/postgres` and paste only the password into `DB_PASSWORD`. Production refuses to start without `WHATSAPP_APP_SECRET`, `ADMIN_PASSWORD` (≥12 chars) and `ANTHROPIC_API_KEY`.
 3. Generate a public domain, e.g. `https://babito-agent.up.railway.app`. Check `GET /health` → `{"ok":true}`.
 4. Run migrations once **from your machine** with the production `DATABASE_URL` (`DATABASE_URL=... npm run db:migrate`), or apply the files in `supabase/migrations/` through Supabase. The production image doesn't include `tsx` or `scripts/`, so `npm run db:migrate` can't run inside it.
@@ -55,6 +55,11 @@ Meta app → WhatsApp → Configuration → Webhook:
 - Callback URL: `https://<your-domain>/webhook`
 - Verify token: your `WHATSAPP_VERIFY_TOKEN`
 - Subscribe to the **messages** field (and `smb_message_echoes` if you use coexistence).
+
+Three more switches, or messages never arrive (no error anywhere, the webhook just stays silent):
+- **Publish the app** (App settings → Basic: privacy policy, terms and data-deletion URLs + category; then Publish). An unpublished app only receives the dashboard's test webhooks.
+- **Register the number** with the Cloud API: `POST /<PHONE_NUMBER_ID>/register` with `{"messaging_product":"whatsapp","pin":"<6 digits>"}`. Until then the number's `status` is `PENDING`, sends fail with `133010 Account not registered`, and WhatsApp users see "not on WhatsApp". Keep the PIN; it's the number's two-step PIN.
+- **Subscribe the WABA to the app**: `POST /<WABA_ID>/subscribed_apps`. Needs a token with `whatsapp_business_management` and full control of the WABA; the bot's messaging-only system-user token can't do it (a temporary token from the dashboard's "Generate token" can). Check with `GET` on the same path: your app must be listed.
 
 Send a message to the business number. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin`.
 
