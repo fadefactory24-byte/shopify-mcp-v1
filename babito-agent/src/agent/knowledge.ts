@@ -18,6 +18,8 @@ export interface Settings {
   businessHours: { timezone: string; days: Record<string, [string, string] | null> } | null;
   handoffExpectation: Record<string, string>;
   unsupportedMediaReply: Record<string, string>;
+  /** Reply to a photo/video/document without text: we can't see it, so ask what it's about. */
+  mediaReceivedReply: Record<string, string>;
 }
 
 const DEFAULT_HANDOFF: Record<string, string> = {
@@ -93,6 +95,11 @@ export class KnowledgeService {
         ar: "حالياً بقدر أساعدك بالرسائل المكتوبة بس.",
         he: "כרגע אפשר לעזור רק בהודעות כתובות.",
         en: "For now I can only help with text messages.",
+      },
+      mediaReceivedReply: (raw.media_received_reply as Record<string, string>) ?? {
+        ar: "وصلنا الملف. عشان نقدر نساعد، اكتبولنا شو الموضوع، وإذا بخص طلبية ابعتوا كمان رقم الطلبية.",
+        he: "קיבלנו את הקובץ. כדי שנוכל לעזור, כתבו במה מדובר, ואם זה קשור להזמנה גם את מספר ההזמנה.",
+        en: "Got it. To help, please write what it's about, and the order number if it's about an order.",
       },
     };
     this.settingsCache = { at: Date.now(), value };

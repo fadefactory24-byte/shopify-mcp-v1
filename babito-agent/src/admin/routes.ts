@@ -10,6 +10,8 @@ import { repo } from "../db/repo.js";
  * and actions: reply as staff, take over, release to AI, close, forget customer.
  * Protected by HTTP Basic auth (user "admin", ADMIN_PASSWORD) + same-origin check on POST.
  */
+const INLINE_MEDIA = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/3gpp", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "application/pdf"]);
+
 export function adminRoutes(deps: AppDeps) {
   const r = new Hono();
   const { db } = deps;
@@ -171,7 +173,7 @@ export function adminRoutes(deps: AppDeps) {
           <h2>Messages</h2>
           ${msgs.map(
             (m) => html`<div class="msg ${m.direction === "inbound" ? "in" : m.author === "human_agent" ? "staff" : "out"}">
-              ${m.body ?? `[${m.type}]`}
+              ${(m.media as { id?: string } | null)?.id ? html`<a href="/admin/media/${m.id}" target="_blank" rel="noopener">[${m.type}: open]</a> ` : ""}${m.body ?? ((m.media as { id?: string } | null)?.id ? "" : `[${m.type}]`)}
               <div class="muted" style="font-size:11px">${m.author} · ${m.status}${m.error ? html` · <span class="bad">${m.error}</span>` : ""} · ${new Date(m.created_at).toLocaleString("he-IL")}</div>
             </div>`,
           )}
@@ -194,6 +196,32 @@ export function adminRoutes(deps: AppDeps) {
           )}`,
       ),
     );
+  });
+
+  /**
+   * Customer photo/video/document, fetched from WhatsApp on demand (never stored here). Only safe
+   * media types are shown inline; anything else downloads as an opaque file.
+   */
+  r.get("/media/:messageId", async (c) => {
+    const { rows } = await db.query<{ media: { id?: string } | null }>(`select media from messages where id = $1`, [c.req.param("messageId")]);
+    const mediaId = rows[0]?.media?.id;
+    if (!mediaId) return c.text("no media for this message", 404);
+    if (!deps.media?.downloadMedia) return c.text("media viewing not available", 501);
+    try {
+      const { contentType, data } = await deps.media.downloadMedia(mediaId);
+      const type = contentType.split(";")[0]!.trim().toLowerCase();
+      const inline = INLINE_MEDIA.has(type);
+      return c.body(data, 200, {
+        "Content-Type": inline ? type : "application/octet-stream",
+        "Content-Disposition": inline ? "inline" : "attachment",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; sandbox",
+        "Cache-Control": "private, no-store",
+      });
+    } catch (err) {
+      deps.log.warn({ err: String(err) }, "media download failed");
+      return c.text("could not load this file from WhatsApp (media expires after 30 days)", 502);
+    }
   });
 
   r.post("/conversations/:id/reply", async (c) => {

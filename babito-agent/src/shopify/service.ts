@@ -18,6 +18,8 @@ export interface CatalogItem {
   priceMax: number;
   compareAtMax: number | null;
   currency: string;
+  /** Any variant sellable; null when unknown (only the first variants are checked). */
+  available?: boolean | null;
 }
 
 export interface ProductDetail {
@@ -85,6 +87,15 @@ export function orderStage(o: {
     default:
       return "processing";
   }
+}
+
+/**
+ * Product-level availability from the first variants' availableForSale flags. If none of those is
+ * sellable but the product has more variants than were fetched, we don't know: null.
+ */
+export function catalogAvailability(flags: boolean[], variantCount: number): boolean | null {
+  if (flags.some(Boolean)) return true;
+  return variantCount > flags.length ? null : false;
 }
 
 /** "#1001", "1001", "הזמנה 1001" -> Shopify search query for the order name (default "#1001" format). */
@@ -230,6 +241,10 @@ export class LiveShopifyService implements ShopifyService {
           priceMax: Number(p.priceRangeV2.maxVariantPrice.amount),
           compareAtMax: p.compareAtPriceRange?.maxVariantCompareAtPrice ? Number(p.compareAtPriceRange.maxVariantCompareAtPrice.amount) : null,
           currency: p.priceRangeV2.minVariantPrice.currencyCode,
+          available: catalogAvailability(
+            (p.variants?.nodes ?? []).map((v: any) => Boolean(v.availableForSale)),
+            p.variantsCount?.count ?? p.variants?.nodes?.length ?? 0,
+          ),
         });
       }
       if (!data.products.pageInfo.hasNextPage) break;

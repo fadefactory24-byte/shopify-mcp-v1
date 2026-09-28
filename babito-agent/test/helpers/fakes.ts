@@ -143,6 +143,13 @@ export class FakeWhatsApp implements WhatsAppSender {
     this.reads.push(id);
     if (typing) this.typing.push(id);
   }
+  /** What downloadMedia returns (tests can swap in other content types). */
+  media = { contentType: "image/jpeg", data: new Uint8Array([0xff, 0xd8, 0xff]).buffer as ArrayBuffer };
+  downloaded: string[] = [];
+  async downloadMedia(id: string) {
+    this.downloaded.push(id);
+    return this.media;
+  }
 }
 
 export class FakeNotifier implements HandoffNotifier {

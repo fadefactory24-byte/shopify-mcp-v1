@@ -7,6 +7,7 @@ import type { Logger } from "./logger.js";
 import type { MessageProcessor } from "./pipeline/processor.js";
 import { adminRoutes } from "./admin/routes.js";
 import type { KnowledgeService } from "./agent/knowledge.js";
+import type { WhatsAppSender } from "./whatsapp/client.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "./whatsapp/webhook.js";
 
 export interface AppDeps {
@@ -14,6 +15,8 @@ export interface AppDeps {
   log: Logger;
   processor: MessageProcessor;
   knowledge: KnowledgeService;
+  /** Used by the dashboard to show customer photos/videos/documents. */
+  media?: Pick<WhatsAppSender, "downloadMedia">;
   config: {
     verifyToken: string;
     appSecret: string;

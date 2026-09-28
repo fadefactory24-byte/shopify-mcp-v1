@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractPrices, isExplicitHumanRequest, ungroundedPrices } from "../src/agent/guardrails.js";
 import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
-import { orderNameQuery, orderStage, searchCatalog, stripHtml } from "../src/shopify/service.js";
+import { catalogAvailability, orderNameQuery, orderStage, searchCatalog, stripHtml } from "../src/shopify/service.js";
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
 import { withRetry } from "../src/util/retry.js";
 import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
@@ -132,6 +132,12 @@ describe("catalog search", () => {
     expect(searchCatalog([...CATALOG, mat], "רצפה משחק")[0]?.id).toBe(mat.id);
     expect(searchCatalog([...CATALOG, mat], "משטח פעילות")[0]?.id).toBe(mat.id);
   });
+});
+
+describe("catalog availability", () => {
+  it("available if any fetched variant is sellable", () => expect(catalogAvailability([false, true], 2)).toBe(true));
+  it("sold out when every variant was checked", () => expect(catalogAvailability([false, false], 2)).toBe(false));
+  it("unknown when unchecked variants remain", () => expect(catalogAvailability(Array(15).fill(false), 90)).toBeNull());
 });
 
 describe("order helpers", () => {

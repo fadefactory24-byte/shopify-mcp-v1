@@ -76,7 +76,7 @@ export const TOOLS = [
   def({
     name: "search_products",
     description:
-      "Search the live BABITO catalog. Product titles are in HEBREW, so always pass Hebrew keywords (translate from Arabic/English), optionally plus English synonyms. Example: customer asks 'جهاز منع الاختناق' -> query 'מכשיר חנק anti choking'. Returns up to 5 matches with current price range and link. If none of the results clearly is what the customer asked for, search once more with different Hebrew words (synonyms, singular/plural) before saying the store doesn't have it. Use get_product for variant prices/availability.",
+      "Search the live BABITO catalog. Product titles are in HEBREW, so always pass Hebrew keywords (translate from Arabic/English), optionally plus English synonyms. Example: customer asks 'جهاز منع الاختناق' -> query 'מכשיר חנק anti choking'. Returns up to 5 matches with current price range, availability and link. available=false means sold out: never recommend it as if it can be bought; say it's out of stock or suggest an available alternative. If none of the results clearly is what the customer asked for, search once more with different Hebrew words (synonyms, singular/plural) before saying the store doesn't have it. Use get_product for variant prices/availability.",
     schema: z.object({
       query: z.string().min(2).max(120).describe("Hebrew keywords (+ optional English synonyms)"),
     }),
@@ -93,6 +93,7 @@ export const TOOLS = [
           price_to: h.priceMax,
           compare_at_price: h.compareAtMax && h.compareAtMax > h.priceMax ? h.compareAtMax : null,
           currency: h.currency,
+          available: h.available ?? "unknown",
           url: h.url,
         })),
         note: hits.length === 0 ? "No match. Try other Hebrew keywords once, then ask the customer to describe the product or send a link." : undefined,

@@ -3,7 +3,11 @@ import { RetryableError, withRetry } from "../util/retry.js";
 export interface WhatsAppSender {
   sendText(to: string, body: string): Promise<{ waMessageId: string }>;
   markRead(waMessageId: string, typing: boolean): Promise<void>;
+  /** Fetch an inbound media file (photo, video, document) so staff can view it in the dashboard. */
+  downloadMedia?(mediaId: string): Promise<{ contentType: string; data: ArrayBuffer }>;
 }
+
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
 
 export class WhatsAppApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: number) {
@@ -78,6 +82,25 @@ export class WhatsAppCloudClient implements WhatsAppSender {
     const id = json?.messages?.[0]?.id;
     if (!id) throw new WhatsAppApiError("WhatsApp API returned no message id", 200);
     return { waMessageId: id as string };
+  }
+
+  /** Media id -> short-lived URL (Graph API) -> bytes. Both requests need the access token. */
+  async downloadMedia(mediaId: string) {
+    const f = this.opts.fetchImpl ?? fetch;
+    const auth = { Authorization: `Bearer ${this.opts.accessToken}` };
+    const metaRes = await f(`https://graph.facebook.com/${this.opts.graphVersion}/${encodeURIComponent(mediaId)}`, {
+      headers: auth,
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 10_000),
+    });
+    if (!metaRes.ok) throw new WhatsAppApiError(`WhatsApp media lookup ${metaRes.status}`, metaRes.status);
+    const meta = (await metaRes.json()) as { url?: string; mime_type?: string; file_size?: number };
+    if (!meta.url) throw new WhatsAppApiError("WhatsApp media lookup returned no url", 200);
+    if ((meta.file_size ?? 0) > MAX_MEDIA_BYTES) throw new WhatsAppApiError("media file too large", 413);
+    const fileRes = await f(meta.url, { headers: auth, signal: AbortSignal.timeout(30_000) });
+    if (!fileRes.ok) throw new WhatsAppApiError(`WhatsApp media download ${fileRes.status}`, fileRes.status);
+    const data = await fileRes.arrayBuffer();
+    if (data.byteLength > MAX_MEDIA_BYTES) throw new WhatsAppApiError("media file too large", 413);
+    return { contentType: meta.mime_type ?? fileRes.headers.get("content-type") ?? "application/octet-stream", data };
   }
 
   async markRead(waMessageId: string, typing: boolean) {

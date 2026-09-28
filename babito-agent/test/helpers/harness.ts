@@ -35,6 +35,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     log,
     processor: services.processor,
     knowledge: services.knowledge,
+    media: whatsapp,
     config: {
       verifyToken: cfg.WHATSAPP_VERIFY_TOKEN,
       appSecret: cfg.WHATSAPP_APP_SECRET,

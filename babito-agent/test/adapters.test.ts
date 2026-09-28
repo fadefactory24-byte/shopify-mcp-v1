@@ -124,6 +124,21 @@ describe("WhatsApp client", () => {
     expect(JSON.parse(String(calls[1]!.init.body))).toMatchObject({ messaging_product: "whatsapp", to: "972501234567", type: "text", text: { body: "hi" } });
   });
 
+  it("downloads media in two authenticated steps and refuses oversized files", async () => {
+    const { f, calls } = mockFetch([
+      json({ url: "https://lookaside.fbsbx.com/media/abc", mime_type: "image/jpeg", file_size: 3 }),
+      () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/jpeg" } }),
+      json({ url: "https://lookaside.fbsbx.com/media/big", mime_type: "video/mp4", file_size: 90_000_000 }),
+    ]);
+    const c = new WhatsAppCloudClient({ accessToken: "tok", phoneNumberId: "PNID", graphVersion: "v23.0", fetchImpl: f });
+    const media = await c.downloadMedia("MEDIA1");
+    expect(media.contentType).toBe("image/jpeg");
+    expect(media.data.byteLength).toBe(3);
+    expect(calls[0]!.url).toBe("https://graph.facebook.com/v23.0/MEDIA1");
+    expect(calls.map((x) => new Headers(x.init.headers as HeadersInit).get("authorization"))).toEqual(["Bearer tok", "Bearer tok"]);
+    await expect(c.downloadMedia("BIG")).rejects.toThrow("too large");
+  });
+
   it("does not retry business errors like the 24h window (131047)", async () => {
     const { f, calls } = mockFetch([json({ error: { message: "Re-engagement message", code: 131047 } }, 400)]);
     const c = new WhatsAppCloudClient({ accessToken: "tok", phoneNumberId: "PNID", graphVersion: "v23.0", fetchImpl: f });

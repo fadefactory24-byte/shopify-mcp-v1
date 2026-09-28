@@ -2,7 +2,7 @@
 
 export const CATALOG_QUERY = /* GraphQL */ `
   query Catalog($after: String) {
-    products(first: 100, after: $after, query: "status:active") {
+    products(first: 50, after: $after, query: "status:active") {
       nodes {
         id
         title
@@ -14,6 +14,8 @@ export const CATALOG_QUERY = /* GraphQL */ `
         description(truncateAt: 600)
         priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount currencyCode } }
         compareAtPriceRange { maxVariantCompareAtPrice { amount } }
+        variantsCount { count }
+        variants(first: 15) { nodes { availableForSale } }
       }
       pageInfo { hasNextPage endCursor }
     }

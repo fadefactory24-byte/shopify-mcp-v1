@@ -74,6 +74,7 @@ export class PublicStorefrontShopify implements ShopifyService {
         priceMax: Math.max(...prices),
         compareAtMax: compare.length ? Math.max(...compare) : null,
         currency: "ILS",
+        available: p.variants.some((v) => v.available),
       };
     });
   }

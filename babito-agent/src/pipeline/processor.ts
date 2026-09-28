@@ -276,13 +276,17 @@ export class MessageProcessor {
       return;
     }
 
-    // Only non-text content (voice note, image without caption, sticker...): polite canned reply, no LLM cost.
+    // Only non-text content: canned reply, no LLM cost. Photos/videos/documents are usually evidence
+    // (damaged item, payment screenshot) that staff can open in the dashboard, so ask what it's about;
+    // voice notes and stickers get the "please write" reply.
     if (texts.length === 0) {
       const onlyReactions = pending.every((p) => p.type === "reaction");
       await repo.setInboundStatus(this.db, ids, onlyReactions ? "skipped" : "processed");
       if (!onlyReactions) {
-        const reply = settings.unsupportedMediaReply[lang ?? "he"] ?? settings.unsupportedMediaReply.he ?? "🙏";
-        await this.sendReply(conv, customer, reply, null, "system");
+        const file = pending.some((p) => ["image", "video", "document"].includes(p.type));
+        const texts_ = file ? settings.mediaReceivedReply : settings.unsupportedMediaReply;
+        const reply = texts_[lang ?? "he"] ?? texts_.he ?? "";
+        if (reply) await this.sendReply(conv, customer, reply, null, "system");
       }
       return;
     }

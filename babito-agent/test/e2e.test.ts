@@ -403,6 +403,31 @@ describe("conversations", () => {
     expect(h.whatsapp.sent).toHaveLength(1);
   });
 
+  it("photo without text: asks what it's about (staff can open it in the dashboard), no LLM cost", async () => {
+    await h.customerSays(mediaWebhook(CUSTOMER_PHONE, "image"));
+    expect(h.llm.requests).toHaveLength(0);
+    expect(lastSent()!.body).toContain("מספר ההזמנה");
+  });
+
+  it("dashboard shows customer photos safely, fetched from WhatsApp on demand", async () => {
+    await h.customerSays(mediaWebhook(CUSTOMER_PHONE, "image"));
+    const [msg] = await h.q("select id from messages where direction='inbound'");
+    const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}` };
+    expect((await h.app.request(`http://localhost/admin/media/${msg.id}`)).status).toBe(401);
+    const res = await h.app.request(`http://localhost/admin/media/${msg.id}`, { headers: auth });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(h.whatsapp.downloaded).toEqual(["MEDIA1"]);
+    // A file type that could run script in the browser is only offered as a download.
+    h.whatsapp.media = { contentType: "text/html", data: new TextEncoder().encode("<script>alert(1)</script>").buffer as ArrayBuffer };
+    const risky = await h.app.request(`http://localhost/admin/media/${msg.id}`, { headers: auth });
+    expect(risky.headers.get("content-type")).toBe("application/octet-stream");
+    expect(risky.headers.get("content-disposition")).toBe("attachment");
+    const [conv] = await h.q("select id from conversations");
+    expect(await (await h.app.request(`http://localhost/admin/conversations/${conv.id}`, { headers: auth })).text()).toContain(`/admin/media/${msg.id}`);
+  });
+
   it("knowledge questions use get_knowledge (live Shopify policy)", async () => {
     h.llm.push(callTool("get_knowledge", { keys: ["policy.shipping"] }), (req) => {
       const r = lastToolResults(req)[0]!.content;
