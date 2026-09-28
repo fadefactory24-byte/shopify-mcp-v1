@@ -3,7 +3,7 @@ import { basicAuth } from "hono/basic-auth";
 import { html } from "hono/html";
 import type { AppDeps } from "../app.js";
 import { repo } from "../db/repo.js";
-import { ConnectError, completeWhatsAppOnboarding, connectPageBody, parseConnectInput } from "./whatsapp-connect.js";
+import { ConnectError, completeWhatsAppOnboarding, connectPageBody, inspectGrant, parseCode, parseConnectInput } from "./whatsapp-connect.js";
 
 /**
  * Minimal staff dashboard (server-rendered, no build step):
@@ -303,6 +303,22 @@ export function adminRoutes(deps: AppDeps) {
     } catch (err) {
       const message = err instanceof ConnectError ? err.message : "unexpected error";
       deps.log.warn({ event: "whatsapp_connect_failed", error: message }, "WhatsApp connect failed");
+      return c.json({ error: message }, 502);
+    }
+  });
+
+  /** Diagnostics: Meta returned a sign-in code but no WhatsApp account. Reads only; nothing is connected. */
+  r.post("/whatsapp-connect/inspect", async (c) => {
+    if (!connectCfg.appId || !connectCfg.embeddedSignupConfigId || !connectCfg.appSecret) return c.json({ error: "not configured" }, 501);
+    const code = parseCode(await c.req.json().catch(() => null));
+    if (!code) return c.json({ error: "invalid input" }, 400);
+    try {
+      const report = await inspectGrant(connectCfg, code, deps.fetchImpl ?? fetch);
+      deps.log.info({ event: "whatsapp_connect_inspect", scopes: report.scopes, wabas: report.wabas.map((w) => ({ id: w.id, numbers: w.numbers.map((n) => n.id) })) }, "Embedded Signup returned no WABA; grant inspected");
+      return c.json(report);
+    } catch (err) {
+      const message = err instanceof ConnectError ? err.message : "unexpected error";
+      deps.log.warn({ event: "whatsapp_connect_inspect_failed", error: message }, "grant inspection failed");
       return c.json({ error: message }, 502);
     }
   });

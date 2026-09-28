@@ -700,3 +700,36 @@ describe("admin: connect a WhatsApp Business app number (Embedded Signup)", () =
     expect(text).not.toContain("test-app-secret");
   });
 });
+
+describe("admin: Embedded Signup diagnostics", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+
+  it("reports what a sign-in granted without subscribing anything or returning the token", async () => {
+    await h.db.close();
+    h.processor.stopTimers();
+    h = await createHarness({ META_APP_ID: "111222333", WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID: "987654321", WHATSAPP_GRAPH_VERSION: "v25.0" });
+    const calls: string[] = [];
+    h.setMetaFetch(async (input, init) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? "GET"} ${url.split("?")[0]}`);
+      const json = url.includes("/oauth/access_token")
+        ? { access_token: "BIZ-TOKEN-SECRET" }
+        : url.includes("/debug_token")
+          ? { data: { scopes: ["whatsapp_business_management", "whatsapp_business_messaging"], granular_scopes: [{ scope: "whatsapp_business_management", target_ids: ["444000"] }, { scope: "whatsapp_business_messaging", target_ids: ["444000"] }] } }
+          : url.includes("/phone_numbers")
+            ? { data: [{ id: "555000", display_phone_number: "+1 555-159-3890", platform_type: "CLOUD_API", is_on_biz_app: false }] }
+            : { id: "444000", name: "Test WhatsApp Business Account" };
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const res = await h.app.request("http://localhost/admin/whatsapp-connect/inspect", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ code: "one-time-code" }) });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain("BIZ-TOKEN-SECRET");
+    expect(JSON.parse(text)).toEqual({
+      scopes: ["whatsapp_business_management", "whatsapp_business_messaging"],
+      wabas: [{ id: "444000", name: "Test WhatsApp Business Account", numbers: [{ id: "555000", display_phone_number: "+1 555-159-3890", platform_type: "CLOUD_API", is_on_biz_app: false }] }],
+    });
+    expect(calls.some((c) => c.includes("subscribed_apps"))).toBe(false);
+    expect((await h.app.request("http://localhost/admin/whatsapp-connect/inspect", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: "{}" })).status).toBe(400);
+  });
+});

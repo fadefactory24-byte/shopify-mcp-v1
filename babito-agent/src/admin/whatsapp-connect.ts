@@ -47,15 +47,20 @@ async function graph(fetchImpl: typeof fetch, url: string, init: RequestInit = {
   return json;
 }
 
+async function exchangeCode(cfg: ConnectConfig, code: string, fetchImpl: typeof fetch): Promise<string> {
+  const exchange = new URLSearchParams({ client_id: cfg.appId, client_secret: cfg.appSecret, code });
+  const { access_token: token } = await graph(fetchImpl, `https://graph.facebook.com/${cfg.graphVersion}/oauth/access_token?${exchange}`);
+  if (typeof token !== "string" || !token) throw new ConnectError("Meta did not return a business token");
+  return token;
+}
+
 export async function completeWhatsAppOnboarding(
   cfg: ConnectConfig,
   input: { code: string; wabaId: string; phoneNumberId?: string | null },
   fetchImpl: typeof fetch = fetch,
 ): Promise<ConnectResult> {
   const g = `https://graph.facebook.com/${cfg.graphVersion}`;
-  const exchange = new URLSearchParams({ client_id: cfg.appId, client_secret: cfg.appSecret, code: input.code });
-  const { access_token: token } = await graph(fetchImpl, `${g}/oauth/access_token?${exchange}`);
-  if (typeof token !== "string" || !token) throw new ConnectError("Meta did not return a business token");
+  const token = await exchangeCode(cfg, input.code, fetchImpl);
   const auth = { Authorization: `Bearer ${token}` };
 
   const sub = await graph(fetchImpl, `${g}/${input.wabaId}/subscribed_apps`, { method: "POST", headers: auth });
@@ -63,6 +68,42 @@ export async function completeWhatsAppOnboarding(
     ? [await graph(fetchImpl, `${g}/${input.phoneNumberId}?fields=${PHONE_FIELDS}`, { headers: auth })]
     : ((await graph(fetchImpl, `${g}/${input.wabaId}/phone_numbers?fields=${PHONE_FIELDS}`, { headers: auth })).data ?? []);
   return { wabaId: input.wabaId, subscribed: sub?.success === true, numbers };
+}
+
+export interface GrantReport {
+  scopes: string[];
+  wabas: { id: string; name?: string; numbers: ConnectedNumber[]; error?: string }[];
+}
+
+/**
+ * Diagnostics when Meta returns a sign-in code but no WhatsApp account: what did the sign-in grant,
+ * on which WhatsApp accounts, with which numbers? Nothing is subscribed or changed; the token is
+ * used for these reads only and discarded.
+ */
+export async function inspectGrant(cfg: ConnectConfig, code: string, fetchImpl: typeof fetch = fetch): Promise<GrantReport> {
+  const g = `https://graph.facebook.com/${cfg.graphVersion}`;
+  const token = await exchangeCode(cfg, code, fetchImpl);
+  const debug = new URLSearchParams({ input_token: token, access_token: `${cfg.appId}|${cfg.appSecret}` });
+  const info = (await graph(fetchImpl, `${g}/debug_token?${debug}`)).data ?? {};
+  const granular: { scope?: string; target_ids?: string[] }[] = Array.isArray(info.granular_scopes) ? info.granular_scopes : [];
+  const ids = [...new Set(granular.filter((s) => String(s.scope).startsWith("whatsapp_business")).flatMap((s) => s.target_ids ?? []))].slice(0, 5);
+  const auth = { Authorization: `Bearer ${token}` };
+  const wabas: GrantReport["wabas"] = [];
+  for (const id of ids) {
+    try {
+      const { name } = await graph(fetchImpl, `${g}/${id}?fields=name`, { headers: auth });
+      const numbers: ConnectedNumber[] = (await graph(fetchImpl, `${g}/${id}/phone_numbers?fields=${PHONE_FIELDS}`, { headers: auth })).data ?? [];
+      wabas.push({ id, name, numbers });
+    } catch (err) {
+      wabas.push({ id, numbers: [], error: err instanceof ConnectError ? err.message : "lookup failed" });
+    }
+  }
+  return { scopes: Array.isArray(info.scopes) ? info.scopes : [], wabas };
+}
+
+export function parseCode(body: any): string | null {
+  const code = typeof body?.code === "string" ? body.code.trim() : "";
+  return code && code.length <= 2000 ? code : null;
 }
 
 /** Validates the browser's POST body; returns null when it is not a plausible Embedded Signup result. */
@@ -102,13 +143,27 @@ export function connectPageBody(cfg: { appId: string; embeddedSignupConfigId: st
         let data;
         try { data = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data; } catch { return; }
         if (!data || data.type !== "WA_EMBEDDED_SIGNUP") return;
-        if (String(data.event).startsWith("FINISH")) { session = data.data || {}; log("Meta: finished (" + data.event + ")"); }
-        else if (data.event === "CANCEL") log("Meta: cancelled at step " + ((data.data || {}).current_step || "?"));
-        else if (data.event === "ERROR") log("Meta error: " + ((data.data || {}).error_message || "unknown"));
+        const d = data.data || {};
+        if (String(data.event).startsWith("FINISH")) { session = d; log("Meta: finished (" + data.event + ")"); }
+        else if (data.event === "CANCEL") log("Meta: cancelled at step " + (d.current_step || "?") + (d.error_message ? " (" + d.error_message + ")" : ""));
+        else if (data.event === "ERROR") log("Meta error: " + (d.error_message || "unknown") + (d.error_code ? " [" + d.error_code + "]" : ""));
+        else log("Meta event: " + data.event);
       });
       async function finish(code) {
         for (let i = 0; i < 30 && !session; i++) await new Promise((r) => setTimeout(r, 200));
-        if (!session || !session.waba_id) { log("No WhatsApp account id came back from Meta. Nothing was connected."); return; }
+        if (!session || !session.waba_id) {
+          log("Meta sent no WhatsApp account, so nothing was connected. Asking Meta what this sign-in granted…");
+          const res = await fetch("/admin/whatsapp-connect/inspect", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ code }) });
+          const r = await res.json().catch(() => ({ error: "bad response" }));
+          if (!res.ok) { log("Check failed: " + (r.error || res.status)); return; }
+          log("Granted permissions: " + (r.scopes.join(", ") || "none"));
+          if (!r.wabas.length) log("No WhatsApp account was shared with the app in this sign-in.");
+          for (const w of r.wabas) {
+            log("WhatsApp account " + w.id + " (" + (w.name || "?") + ")" + (w.error ? ": " + w.error : ""));
+            for (const n of w.numbers) log("  number " + (n.display_phone_number || "?") + ": id " + n.id + ", platform " + (n.platform_type || "?") + ", on business app: " + n.is_on_biz_app);
+          }
+          return;
+        }
         log("Connecting WhatsApp account " + session.waba_id + " to the bot…");
         const res = await fetch("/admin/whatsapp-connect/complete", {
           method: "POST",
@@ -130,7 +185,8 @@ export function connectPageBody(cfg: { appId: string; embeddedSignupConfigId: st
         session = null;
         FB.login((response) => {
           const code = response && response.authResponse && response.authResponse.code;
-          if (code) finish(code); else log("Sign-in was not completed.");
+          log("Facebook sign-in ended: status " + ((response && response.status) || "?") + ", code " + (code ? "received" : "none"));
+          if (code) finish(code);
         }, {
           config_id: S.configId,
           response_type: "code",
