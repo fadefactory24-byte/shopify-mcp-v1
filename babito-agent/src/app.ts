@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { timingSafeEqual } from "node:crypto";
 import type { Db } from "./db/client.js";
@@ -52,9 +53,11 @@ export function createApp(deps: AppDeps) {
     return c.text("forbidden", 403);
   });
 
-  app.post("/webhook", async (c) => {
+  // Checked from Content-Length, or while the body streams in: an oversized body is never read whole.
+  const webhookBodyLimit = bodyLimit({ maxSize: 1_000_000, onError: (c) => c.text("payload too large", 413) });
+
+  app.post("/webhook", webhookBodyLimit, async (c) => {
     const raw = await c.req.text();
-    if (raw.length > 1_000_000) return c.text("payload too large", 413);
 
     if (deps.config.appSecret) {
       if (!verifySignature(raw, c.req.header("x-hub-signature-256"), deps.config.appSecret)) {

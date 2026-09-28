@@ -33,6 +33,24 @@ describe("webhook security & robustness", () => {
     expect(await h.q("select * from messages")).toHaveLength(0);
   });
 
+  it("rejects oversized webhook bodies with 413 without reading them whole", async () => {
+    expect((await h.post(JSON.stringify({ pad: "x".repeat(1_000_001) }))).status).toBe(413);
+    // No Content-Length: a 10 MB stream is cut off shortly after the 1 MB limit.
+    let pulled = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(120);
+    const stream = new ReadableStream({
+      pull(ctl) {
+        if (pulled >= 10_000_000) return ctl.close();
+        pulled += chunk.length;
+        ctl.enqueue(chunk);
+      },
+    });
+    const res = await h.app.request("/webhook", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    expect(res.status).toBe(413);
+    expect(pulled).toBeLessThan(2_000_000);
+    expect(await h.q("select * from messages")).toHaveLength(0);
+  });
+
   it("handles malformed payloads without crashing", async () => {
     expect((await h.post("{not json")).status).toBe(400);
     expect((await h.post({ object: "whatsapp_business_account", entry: "nope" })).status).toBe(200);
