@@ -42,7 +42,7 @@ After migrating, in the Supabase Table Editor:
 
 ## 4. Deploy (Railway example; Fly.io / Render are equivalent)
 
-1. New project → Deploy from GitHub repo → set **root directory** to `/babito-agent` (it has its own `Dockerfile`) and the **branch** you deploy from (Railway otherwise builds the repo's default branch). Service settings: health check `/health` (60s), restart on failure (10 retries), 1 replica in **EU West**, variable `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`.
+1. New project → Deploy from GitHub repo → set **root directory** to `/babito-agent` (it has its own `Dockerfile`) and the **branch** you deploy from, in the service's Source settings for the environment (if the environment has no branch, Railway builds the repo's default branch on every deploy and ignores pushes to yours). Service settings: health check `/health` (60s), restart on failure (10 retries), 1 replica in **EU West**, variable `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=100`.
 2. Variables → Raw Editor: add the variables (reference: `.env.example`). Tip: set `DATABASE_URL=postgresql://postgres.<ref>:${{DB_PASSWORD}}@<pooler-host>:5432/postgres` and paste only the password into `DB_PASSWORD`. Production refuses to start without `WHATSAPP_APP_SECRET`, `ADMIN_PASSWORD` (≥12 chars) and `ANTHROPIC_API_KEY`.
 3. Generate a public domain, e.g. `https://babito-agent.up.railway.app`. Check `GET /health` → `{"ok":true}`.
 4. Run migrations once **from your machine** with the production `DATABASE_URL` (`DATABASE_URL=... npm run db:migrate`), or apply the files in `supabase/migrations/` through Supabase. The production image doesn't include `tsx` or `scripts/`, so `npm run db:migrate` can't run inside it.
