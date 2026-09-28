@@ -3,6 +3,7 @@ import type { ChatBlock, LLMProvider, LLMRequest, LLMResponse } from "../../src/
 import type { HandoffNotice, HandoffNotifier } from "../../src/pipeline/handoff.js";
 import { ShopifyError } from "../../src/shopify/client.js";
 import type { CatalogItem, OrderDetail, ProductDetail, ShopifyService } from "../../src/shopify/service.js";
+import type { TrackingService, TrackingStatus } from "../../src/tracking/tracking.js";
 import { WhatsAppApiError, type WhatsAppSender } from "../../src/whatsapp/client.js";
 
 // ------------------------------------------------------------------ Shopify
@@ -116,6 +117,17 @@ export class FakeShopify implements ShopifyService {
   async getPolicies() {
     this.check("getPolicies");
     return [{ type: "shipping_policy", title: "Shipping", body: "זמני אספקה: 7-14 ימי עסקים", url: "https://mybabito.com/policies/shipping-policy" }];
+  }
+}
+
+// ------------------------------------------------------------------ Tracking
+
+export class FakeTracking implements TrackingService {
+  statuses = new Map<string, TrackingStatus>([["RR123456789IL", { stage: "final_leg", lastUpdate: "2026-09-26" }]]);
+  asked: { number: string; carrier?: number }[] = [];
+  async status(number: string, carrier?: number) {
+    this.asked.push({ number, carrier });
+    return this.statuses.get(number) ?? null;
   }
 }
 

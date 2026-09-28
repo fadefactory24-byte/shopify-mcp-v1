@@ -66,6 +66,9 @@ const ConfigSchema = z.object({
   /** In-process retention purge every N hours (0 = off, e.g. if an external cron calls /cron/maintenance). */
   MAINTENANCE_INTERVAL_HOURS: int(24),
 
+  /** Optional 17TRACK API key: live parcel status for order questions (100 new parcels/month free). */
+  SEVENTEENTRACK_API_KEY: z.string().optional().default(""),
+
   // Staff notifications on handoff (both optional)
   STAFF_NOTIFY_WEBHOOK_URL: z.string().optional().default(""),
   STAFF_WHATSAPP_NUMBERS: z.string().optional().default(""),
@@ -106,6 +109,7 @@ export function redactedConfigSummary(cfg: Config) {
     signatureCheck: Boolean(cfg.WHATSAPP_APP_SECRET),
     llm: { provider: cfg.LLM_PROVIDER, main: cfg.AI_MODEL_MAIN, effort: cfg.AI_MODEL_MAIN_EFFORT, fast: cfg.AI_MODEL_FAST },
     staffWebhook: Boolean(cfg.STAFF_NOTIFY_WEBHOOK_URL),
+    liveTracking: Boolean(cfg.SEVENTEENTRACK_API_KEY),
     adminEnabled: Boolean(cfg.ADMIN_PASSWORD),
   };
 }

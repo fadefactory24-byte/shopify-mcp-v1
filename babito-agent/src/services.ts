@@ -8,6 +8,7 @@ import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
+import { SeventeenTrack, type TrackingService } from "./tracking/tracking.js";
 import { WhatsAppCloudClient, type WhatsAppSender } from "./whatsapp/client.js";
 
 export interface Services {
@@ -22,7 +23,13 @@ export interface Services {
 }
 
 /** Wire real implementations; tests pass fakes via `overrides`. */
-export function buildServices(cfg: Config, db: Db, log: Logger, overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier">> = {}): Services {
+export function buildServices(
+  cfg: Config,
+  db: Db,
+  log: Logger,
+  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier">> & { tracking?: TrackingService } = {},
+): Services {
+  const tracking = overrides.tracking ?? (cfg.SEVENTEENTRACK_API_KEY ? new SeventeenTrack({ apiKey: cfg.SEVENTEENTRACK_API_KEY }) : undefined);
   const whatsapp =
     overrides.whatsapp ??
     new WhatsAppCloudClient({ accessToken: cfg.WHATSAPP_ACCESS_TOKEN, phoneNumberId: cfg.WHATSAPP_PHONE_NUMBER_ID, graphVersion: cfg.WHATSAPP_GRAPH_VERSION });
@@ -55,6 +62,7 @@ export function buildServices(cfg: Config, db: Db, log: Logger, overrides: Parti
       shopify,
       knowledge,
       notifier,
+      tracking,
       log,
       whatsapp,
       config: { model: cfg.AI_MODEL_MAIN, effort: cfg.AI_MODEL_MAIN_EFFORT, maxIterations: cfg.AI_MAX_TOOL_ITERATIONS, historyMessages: cfg.AI_HISTORY_MESSAGES },

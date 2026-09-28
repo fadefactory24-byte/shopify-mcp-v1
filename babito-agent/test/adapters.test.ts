@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { AnthropicProvider } from "../src/agent/anthropic.js";
 import { ShopifyError, ShopifyGraphQLClient } from "../src/shopify/client.js";
 import { LiveShopifyService } from "../src/shopify/service.js";
+import { SeventeenTrack } from "../src/tracking/tracking.js";
 import { isPermanentSendError, WhatsAppApiError, WhatsAppCloudClient } from "../src/whatsapp/client.js";
 
 type Call = { url: string; init: RequestInit };
@@ -147,5 +148,29 @@ describe("WhatsApp client", () => {
     expect(isPermanentSendError(err)).toBe(true); // the sweeper won't resend it either
     expect(calls).toHaveLength(1);
     expect(isPermanentSendError(new WhatsAppApiError("WhatsApp API 500: boom", 500))).toBe(false);
+  });
+});
+
+describe("17TRACK client", () => {
+  const info = (status: string, sub: string) => ({ code: 0, data: { accepted: [{ number: "UL1YP", track_info: { latest_status: { status, sub_status: sub }, latest_event: { time_iso: "2026-09-26T10:00:00+08:00", location: "SOMEWHERE", description: "event" } } }], rejected: [] } });
+  it("registers an unknown parcel once, then reads its stage; caches the answer", async () => {
+    const { f, calls } = mockFetch([
+      json({ code: 0, data: { accepted: [], rejected: [{ number: "UL1YP", error: { code: -18019902, message: "not registered" } }] } }),
+      json({ code: 0, data: { accepted: [{ number: "UL1YP", carrier: 190012 }], rejected: [] } }),
+      json(info("InTransit", "InTransit_Arrival")),
+    ]);
+    const t = new SeventeenTrack({ apiKey: "k", fetchImpl: f });
+    expect(await t.status("UL1YP", 190012)).toEqual({ stage: "final_leg", lastUpdate: "2026-09-26" });
+    expect(calls.map((c) => c.url.split("/").pop())).toEqual(["gettrackinfo", "register", "gettrackinfo"]);
+    expect(new Headers(calls[0]!.init.headers as HeadersInit).get("17token")).toBe("k");
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual([{ number: "UL1YP", carrier: 190012 }]);
+    await t.status("UL1YP", 190012);
+    expect(calls).toHaveLength(3); // served from cache
+  });
+  it("returns null (fallback to Shopify) on API errors instead of throwing", async () => {
+    const { f } = mockFetch([json({ code: -1, data: null }), json({}, 500)]);
+    const t = new SeventeenTrack({ apiKey: "k", fetchImpl: f });
+    expect(await t.status("A1")).toBeNull();
+    expect(await t.status("A2")).toBeNull();
   });
 });

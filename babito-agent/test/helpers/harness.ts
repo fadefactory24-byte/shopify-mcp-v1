@@ -2,7 +2,7 @@ import pino from "pino";
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
 import { buildServices } from "../../src/services.js";
-import { FakeNotifier, FakeShopify, FakeWhatsApp, ScriptedLLM, sign } from "./fakes.js";
+import { FakeNotifier, FakeShopify, FakeTracking, FakeWhatsApp, ScriptedLLM, sign } from "./fakes.js";
 import { createTestDb } from "./pglite.js";
 
 export const APP_SECRET = "test-app-secret";
@@ -29,7 +29,8 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   const shopify = new FakeShopify();
   const whatsapp = new FakeWhatsApp();
   const notifier = new FakeNotifier();
-  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier });
+  const tracking = new FakeTracking();
+  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking });
   const app = createApp({
     db,
     log,
@@ -66,7 +67,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     return (await db.query<T>(sql, params)).rows;
   }
 
-  return { cfg, db, app, llm, shopify, whatsapp, notifier, services, post, customerSays, q, processor: services.processor };
+  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, processor: services.processor };
 }
 
 export type Harness = Awaited<ReturnType<typeof createHarness>>;

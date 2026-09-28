@@ -3,6 +3,7 @@ import { repo, type Conversation, type Customer, type MessageRow } from "../db/r
 import type { Logger } from "../logger.js";
 import type { HandoffNotifier } from "../pipeline/handoff.js";
 import type { ShopifyService } from "../shopify/service.js";
+import type { TrackingService } from "../tracking/tracking.js";
 import type { Lang } from "../util/text.js";
 import { ungroundedPrices } from "./guardrails.js";
 import { businessClock, type KnowledgeService } from "./knowledge.js";
@@ -16,6 +17,7 @@ export interface AgentDeps {
   shopify: ShopifyService;
   knowledge: KnowledgeService;
   notifier: HandoffNotifier;
+  tracking?: TrackingService;
   log: Logger;
   config: { model: string; effort: "low" | "medium" | "high" | "xhigh" | "max"; maxIterations: number; historyMessages: number };
 }
@@ -72,6 +74,7 @@ export async function runAgent(
     shopify: deps.shopify,
     knowledge,
     notifier: deps.notifier,
+    tracking: deps.tracking,
     log,
     customer: input.customer,
     conversation: input.conversation,

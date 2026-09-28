@@ -4,6 +4,7 @@ import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
 import { catalogAvailability, orderNameQuery, orderStage, searchCatalog, stripHtml } from "../src/shopify/service.js";
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
+import { carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/tracking.js";
 import { withRetry } from "../src/util/retry.js";
 import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
@@ -131,6 +132,30 @@ describe("catalog search", () => {
     const mat = { ...CATALOG[1]!, id: "gid://shopify/Product/1", title: "משטח פעילות לילדים", productType: "", tags: [], handle: "x", description: "רצפה עשויה קצף EVA רך לפינת משחק" };
     expect(searchCatalog([...CATALOG, mat], "רצפה משחק")[0]?.id).toBe(mat.id);
     expect(searchCatalog([...CATALOG, mat], "משטח פעילות")[0]?.id).toBe(mat.id);
+  });
+});
+
+describe("live tracking stages", () => {
+  it.each([
+    ["NotFound", "NotFound_Other", "no_update_yet"],
+    ["InfoReceived", "InfoReceived", "label_created"],
+    ["InTransit", "InTransit_Departure", "in_transit"],
+    ["InTransit", "InTransit_Arrival", "final_leg"],
+    ["InTransit", "InTransit_CustomsProcessing", "final_leg"],
+    ["InTransit", "InTransit_CustomsRequiringInformation", "needs_attention"],
+    ["OutForDelivery", "OutForDelivery_Other", "out_for_delivery"],
+    ["AvailableForPickup", "AvailableForPickup_Other", "available_for_pickup"],
+    ["Delivered", "Delivered_Other", "delivered"],
+    ["DeliveryFailure", "DeliveryFailure_InvalidAddress", "delivery_failed"],
+    ["Exception", "Exception_Delayed", "delayed"],
+    ["Exception", "Exception_Returned", "returning"],
+    ["Exception", "Exception_Lost", "needs_attention"],
+    ["Expired", "Expired_Other", "no_recent_updates"],
+  ])("%s / %s -> %s", (status, sub, stage) => expect(mapTrackingStatus(status, sub)).toBe(stage));
+  it("reads the carrier code from a 17track link only", () => {
+    expect(carrierFromTrackingUrl("https://www.17track.net/en/track?nums=UL547537780YP&fc=190012")).toBe(190012);
+    expect(carrierFromTrackingUrl("https://www.purolator.com/track?pin=X&fc=5")).toBeUndefined();
+    expect(carrierFromTrackingUrl(null)).toBeUndefined();
   });
 });
 

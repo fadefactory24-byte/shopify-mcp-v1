@@ -161,10 +161,12 @@ describe("conversations", () => {
       const o = res!.content.orders[0];
       expect(o.order_number).toBe("#1001");
       expect(o.tracking[0].number).toBe("RR123456789IL");
-      // Contact data never reaches the model.
+      // Live tracking reaches the model as a stage + date only; carrier names and contact data never do.
+      expect(o.live_tracking).toEqual({ stage: "final_leg", last_update: "2026-09-26" });
+      expect(JSON.stringify(res!.content)).not.toContain("Israel Post");
       expect(JSON.stringify(res!.content)).not.toContain("mom@example.com");
       expect(JSON.stringify(res!.content)).not.toContain("123-4567");
-      return say(`طلبك ${o.order_number} انبعت مع ${o.tracking[0].company}، رقم التتبع ${o.tracking[0].number}`)(req);
+      return say(`طلبك ${o.order_number} بالمرحلة الأخيرة من التوصيل، رقم التتبع ${o.tracking[0].number}`)(req);
     });
     await h.customerSays(textWebhook(CUSTOMER_PHONE, "وين طلبي؟"));
     expect(lastSent()!.body).toContain("RR123456789IL");

@@ -10,6 +10,7 @@
 | **A phone number for the bot** | Either a new number, or your current business number. If the number is in use in the WhatsApp Business app, check Meta's *coexistence* onboarding so staff can keep using the app (staff messages then arrive as echoes and put the chat into human mode). |
 | **Shopify Admin API access** | Shopify no longer allows *new* admin-created custom apps (`shpat_…` tokens), so create an app in the **Dev Dashboard** (dev.shopify.com), install it on the BABITO store, and use its client ID + secret (`SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET`; the token refreshes automatically). An existing `shpat_` token still works if you already have one. Scopes: `read_products, read_orders, read_customers, read_fulfillments, read_legal_policies` (+ `read_all_orders` for orders older than 60 days). **Read-only is enough.** |
 | **Anthropic API key** | console.anthropic.com → API keys → `ANTHROPIC_API_KEY`. |
+| Recommended: **17TRACK API key** | api.17track.net → register → API key → `SEVENTEENTRACK_API_KEY`. Shopify fulfillments have tracking numbers but no carrier updates; with this key order answers use the live stage (in transit, final leg, out for delivery, delivered...). Only parcels customers ask about are registered (100 new parcels/month free). |
 | Optional: staff notification webhook | An n8n/Make/Slack incoming webhook URL → `STAFF_NOTIFY_WEBHOOK_URL`. |
 
 ## 2. Local development

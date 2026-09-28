@@ -10,6 +10,7 @@ import {
   type OrderDetail,
   type ShopifyService,
 } from "../shopify/service.js";
+import { carrierFromTrackingUrl, type TrackingService } from "../tracking/tracking.js";
 import type { KnowledgeService } from "./knowledge.js";
 import type { ToolSpec } from "./llm.js";
 
@@ -18,6 +19,8 @@ export interface ToolContext {
   shopify: ShopifyService;
   knowledge: KnowledgeService;
   notifier: HandoffNotifier;
+  /** Live parcel status (optional; without it the bot only knows Shopify's "shipped"). */
+  tracking?: TrackingService;
   log: Logger;
   customer: Customer;
   conversation: Conversation;
@@ -54,8 +57,15 @@ function recentFailedVerifications(ctx: ToolContext): number {
   return ctx.context.failed_verifications.length;
 }
 
-/** What the model may see about an order: status info only, never contact data. */
-function publicOrder(o: OrderDetail) {
+/**
+ * What the model may see about an order: status info only, never contact data. Carrier names are
+ * left out (customers get the tracking link); live tracking is reduced to a stage and a date.
+ */
+async function publicOrder(o: OrderDetail, ctx: ToolContext, live: boolean) {
+  const tracking = o.tracking.filter((t) => t.number || t.url);
+  const shipped = ["shipped", "partially_shipped"].includes(o.stage);
+  const first = tracking.find((t) => t.number);
+  const liveStatus = live && shipped && first?.number && ctx.tracking ? await ctx.tracking.status(first.number, carrierFromTrackingUrl(first.url)) : null;
   return {
     order_number: o.name,
     created_at: o.createdAt.slice(0, 10),
@@ -63,7 +73,8 @@ function publicOrder(o: OrderDetail) {
     payment_status: o.financialStatus,
     fulfillment_status: o.fulfillmentStatus,
     items: o.items,
-    tracking: o.tracking.filter((t) => t.number || t.url),
+    tracking: tracking.map((t) => ({ number: t.number, url: t.url })),
+    live_tracking: liveStatus ? { stage: liveStatus.stage, last_update: liveStatus.lastUpdate } : undefined,
     estimated_delivery_at: o.estimatedDeliveryAt,
     delivered_at: o.deliveredAt,
     shipping_city: o.shippingCity,
@@ -142,7 +153,9 @@ export const TOOLS = [
       }
       await repo.setCustomerShopifyId(ctx.db, ctx.customer.id, found.customerId);
       for (const o of found.orders) rememberVerifiedOrder(ctx, o.name);
-      return { found: true, first_name: found.firstName, orders: found.orders.map(publicOrder) };
+      // Live tracking only for the two most recent orders (each new parcel uses tracking quota).
+      const orders = await Promise.all(found.orders.map((o, i) => publicOrder(o, ctx, i < 2)));
+      return { found: true, first_name: found.firstName, orders };
     },
   }),
 
@@ -178,7 +191,7 @@ export const TOOLS = [
         };
       }
       rememberVerifiedOrder(ctx, order.name);
-      return { found: true, verified: true, order: publicOrder(order) };
+      return { found: true, verified: true, order: await publicOrder(order, ctx, true) };
     },
   }),
 
