@@ -154,6 +154,12 @@ describe("formatting & history", () => {
   it("converts markdown to WhatsApp style", () => {
     expect(toWhatsAppText("## כותרת\n**חשוב** [לינק](https://x.com)\n- פריט")).toBe("כותרת\n*חשוב* לינק: https://x.com\n• פריט");
   });
+  it("never sends the long dash: ranges get a hyphen, clauses a comma, list dashes become bullets", () => {
+    expect(toWhatsAppText("משלוח 4–10 ימי עסקים — חינם לנקודת איסוף")).toBe("משלוח 4-10 ימי עסקים, חינם לנקודת איסוף");
+    expect(toWhatsAppText("— מחמם בקבוקים\n– כרית")).toBe("• מחמם בקבוקים\n• כרית");
+    expect(toWhatsAppText("המחיר 299.99 ₪ — .")).toBe("המחיר 299.99 ₪.");
+    expect(toWhatsAppText("https://mybabito.com/products/עגלת-תינוק-3-ב-1")).toBe("https://mybabito.com/products/עגלת-תינוק-3-ב-1");
+  });
   it("builds alternating history starting with the user and labels staff", () => {
     const row = (direction: "inbound" | "outbound", author: any, body: string) => ({ id: body, conversation_id: "c", customer_id: "u", direction, author, wa_message_id: null, type: "text", body, status: "processed", attempts: 0, error: null, created_at: "" });
     const h = buildHistory([row("outbound", "ai", "hello"), row("inbound", "customer", "a"), row("inbound", "customer", "b"), row("outbound", "human_agent", "hi from staff")]);

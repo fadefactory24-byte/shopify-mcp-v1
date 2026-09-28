@@ -6,3 +6,5 @@ dist/
 *.log
 coverage/
 eval-results/
+private/
+kb-draft.json

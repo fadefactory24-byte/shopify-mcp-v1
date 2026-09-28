@@ -13,15 +13,17 @@ const POLICY_KEYS: Record<string, { type: string; title: string }> = {
 export interface Settings {
   botEnabled: boolean;
   personaNotes: string;
+  /** Owner's business rules (settings.store_rules). Kept in the database so they never land in the public repo. */
+  storeRules: string;
   businessHours: { timezone: string; days: Record<string, [string, string] | null> } | null;
   handoffExpectation: Record<string, string>;
   unsupportedMediaReply: Record<string, string>;
 }
 
 const DEFAULT_HANDOFF: Record<string, string> = {
-  ar: "راح يرد عليك حدا من الفريق بأقرب وقت 🙏",
-  he: "נציג מהצוות יחזור אלייך בהקדם 🙏",
-  en: "Someone from our team will get back to you shortly 🙏",
+  ar: "راح يرد عليك حدا من الفريق بأقرب وقت.",
+  he: "נציג מהצוות יחזור אלייך בהקדם.",
+  en: "Someone from our team will get back to you shortly.",
 };
 
 /**
@@ -50,7 +52,7 @@ export class KnowledgeService {
     return items;
   }
 
-  /** Compact index (key — title) injected into the prompt so the model knows what it can fetch. */
+  /** Compact index (key: title) injected into the prompt so the model knows what it can fetch. */
   async index(): Promise<string> {
     const lines = Object.entries(POLICY_KEYS).map(([k, v]) => `- ${k}: ${v.title}`);
     for (const a of await this.articles()) if (a.product_ids.length === 0) lines.push(`- ${a.key}: ${a.title}`);
@@ -84,12 +86,13 @@ export class KnowledgeService {
     const value: Settings = {
       botEnabled: raw.bot_enabled !== false,
       personaNotes: typeof raw.persona_notes === "string" ? raw.persona_notes : "",
+      storeRules: typeof raw.store_rules === "string" ? raw.store_rules : "",
       businessHours: (raw.business_hours as Settings["businessHours"]) ?? null,
       handoffExpectation: { ...DEFAULT_HANDOFF, ...((raw.handoff_expectation as Record<string, string>) ?? {}) },
       unsupportedMediaReply: (raw.unsupported_media_reply as Record<string, string>) ?? {
-        ar: "حالياً بقدر أساعدك بالرسائل المكتوبة بس 🙏",
-        he: "כרגע אני יכול לעזור רק בהודעות כתובות 🙏",
-        en: "For now I can only help with text messages 🙏",
+        ar: "حالياً بقدر أساعدك بالرسائل المكتوبة بس.",
+        he: "כרגע אפשר לעזור רק בהודעות כתובות.",
+        en: "For now I can only help with text messages.",
       },
     };
     this.settingsCache = { at: Date.now(), value };

@@ -41,7 +41,9 @@ export function toWhatsAppText(input: string, maxChars = 1500): string {
   t = t.replace(/__(.+?)__/g, "_$1_");
   t = t.replace(/^#{1,6}\s+/gm, ""); // headings
   t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "$1: $2"); // [text](url)
-  t = t.replace(/^\s*[-*]\s+/gm, "• ");
+  t = t.replace(/^\s*[-*–—]\s+/gm, "• ");
+  // The owner treats the long dash as unprofessional: number ranges get a hyphen, everything else a comma.
+  t = t.replace(/(\d)\s*[–—]\s*(\d)/g, "$1-$2").replace(/\s*[—–]\s*/g, ", ").replace(/, ([,.:!?])/g, "$1");
   t = t.replace(/\n{3,}/g, "\n\n");
   if (t.length > maxChars) {
     const cut = t.slice(0, maxChars);

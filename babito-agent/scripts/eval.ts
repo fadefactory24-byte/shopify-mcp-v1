@@ -16,7 +16,7 @@
  * Costs real API money (see --dry-run for an estimate). Re-run after every
  * prompt change and compare reports.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pino from "pino";
 import { AnthropicProvider } from "../src/agent/anthropic.js";
@@ -47,7 +47,16 @@ const only = flag("only")?.split(",").map((s) => s.trim()).filter(Boolean);
 const category = flag("category");
 const dryRun = args.includes("--dry-run");
 
-const scenarios = SCENARIOS.filter((s) => (!only || only.includes(s.id)) && (!category || s.category === category));
+// Business-sensitive scenarios stay out of the public repo (private/ is git-ignored); regexes are strings there.
+type PrivateScenario = Omit<Scenario, "expect"> & { expect?: Omit<NonNullable<Scenario["expect"]>, "forbid" | "require"> & { forbid?: string[]; require?: string[] } };
+const privateFile = join(import.meta.dirname, "..", "private", "eval-scenarios.json");
+const privateScenarios: Scenario[] = existsSync(privateFile)
+  ? (JSON.parse(readFileSync(privateFile, "utf8")) as PrivateScenario[]).map((p) => ({
+      ...p,
+      expect: p.expect && { ...p.expect, forbid: p.expect.forbid?.map((r) => new RegExp(r, "i")), require: p.expect.require?.map((r) => new RegExp(r, "i")) },
+    }))
+  : [];
+const scenarios = [...SCENARIOS, ...privateScenarios].filter((s) => (!only || only.includes(s.id)) && (!category || s.category === category));
 const totalTurns = scenarios.reduce((n, s) => n + s.turns.length, 0);
 
 if (dryRun) {
@@ -102,15 +111,23 @@ const services = buildServices(cfg, db, log, {
 
 const kbFile = process.env.EVAL_KB_FILE;
 if (kbFile) {
-  const rows = JSON.parse(readFileSync(kbFile, "utf8")) as { key: string; category: string; title: string; content: string; language?: string }[];
+  // Either an array of KB articles, or { settings: {key: value}, kb: [...] } (owner content).
+  type Article = { key: string; category: string; title: string; content: string; language?: string; product_ids?: string[] };
+  const parsed = JSON.parse(readFileSync(kbFile, "utf8")) as Article[] | { settings?: Record<string, unknown>; kb?: Article[] };
+  const rows = Array.isArray(parsed) ? parsed : (parsed.kb ?? []);
+  const settings = Array.isArray(parsed) ? {} : (parsed.settings ?? {});
   for (const r of rows) {
     await db.query(
-      `insert into kb_articles (key, category, title, content, language, is_active) values ($1,$2,$3,$4,$5,true)
-       on conflict (key) do update set category = excluded.category, title = excluded.title, content = excluded.content, language = excluded.language, is_active = true`,
-      [r.key, r.category, r.title, r.content, r.language ?? "he"],
+      `insert into kb_articles (key, category, title, content, language, product_ids, is_active) values ($1,$2,$3,$4,$5,$6,true)
+       on conflict (key) do update set category = excluded.category, title = excluded.title, content = excluded.content,
+         language = excluded.language, product_ids = excluded.product_ids, is_active = true`,
+      [r.key, r.category, r.title, r.content, r.language ?? "he", r.product_ids ?? []],
     );
   }
-  console.log(`Loaded ${rows.length} KB article(s) from ${kbFile}`);
+  for (const [key, value] of Object.entries(settings)) {
+    await db.query(`insert into settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`, [key, JSON.stringify(value)]);
+  }
+  console.log(`Loaded ${rows.length} KB article(s) and ${Object.keys(settings).length} setting(s) from ${kbFile}`);
 }
 
 interface TurnResult {
@@ -178,6 +195,11 @@ for (const s of scenarios) {
   for (const re of e.forbid ?? []) checks.push({ name: "forbid", pass: !re.test(allReplies), detail: String(re) });
   for (const re of e.require ?? []) checks.push({ name: "require", pass: re.test(allReplies), detail: String(re) });
   checks.push({ name: "replied", pass: allReplies.trim().length > 0 });
+  // Owner style rules, on every reply.
+  checks.push({ name: "no_long_dash", pass: !allReplies.includes("—") });
+  const customerUsedEmoji = s.turns.some((t) => /\p{Extended_Pictographic}/u.test(t));
+  checks.push({ name: "emoji", pass: customerUsedEmoji || !/\p{Extended_Pictographic}/u.test(allReplies), detail: "no emoji unless the customer used one" });
+  checks.push({ name: "no_boilerplate_opener", pass: !/תודה שפנית|شكر[اً]* لتواصلك|thanks for reaching out/i.test(allReplies) });
   // Every reply in the customer's language (URLs carry Hebrew product handles, so strip them first).
   const langs = turns.flatMap((t) => t.replies).map((r) => detectLanguage(r.replace(/https?:\/\/\S+/g, "")));
   checks.push({ name: "language", pass: langs.every((l) => l === null || l === s.lang), detail: `wanted ${s.lang}, got ${langs.join(",")}` });
