@@ -23,6 +23,9 @@ const app = createApp({
     adminPassword: cfg.ADMIN_PASSWORD,
     cronSecret: cfg.CRON_SECRET,
     production: cfg.NODE_ENV === "production",
+    metaAppId: cfg.META_APP_ID,
+    embeddedSignupConfigId: cfg.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID,
+    graphVersion: cfg.WHATSAPP_GRAPH_VERSION,
   },
 });
 

@@ -3,6 +3,7 @@ import { basicAuth } from "hono/basic-auth";
 import { html } from "hono/html";
 import type { AppDeps } from "../app.js";
 import { repo } from "../db/repo.js";
+import { ConnectError, completeWhatsAppOnboarding, connectPageBody, parseConnectInput } from "./whatsapp-connect.js";
 
 /**
  * Minimal staff dashboard (server-rendered, no build step):
@@ -100,6 +101,7 @@ export function adminRoutes(deps: AppDeps) {
       page(
         "Dashboard",
         html`<h1>BABITO WhatsApp Agent</h1>
+          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a></p>
           <div class="stats">
             ${stat("Inbound msgs (24h)", stats.inbound_24h!)} ${stat("AI runs (24h)", stats.runs_24h!)}
             ${stat("Failed runs (24h)", stats.failed_24h!, Number(stats.failed_24h) ? "bad" : "")}
@@ -277,6 +279,32 @@ export function adminRoutes(deps: AppDeps) {
       await repo.audit(tx, "admin", "forget_customer", "customer", id);
     });
     return c.redirect(`/admin`);
+  });
+
+  /** Embedded Signup for a number that stays on the WhatsApp Business app (coexistence). */
+  const connectCfg = {
+    appId: deps.config.metaAppId ?? "",
+    appSecret: deps.config.appSecret,
+    embeddedSignupConfigId: deps.config.embeddedSignupConfigId ?? "",
+    graphVersion: deps.config.graphVersion ?? "v25.0",
+  };
+
+  r.get("/whatsapp-connect", (c) => c.html(page("Connect WhatsApp number", connectPageBody(connectCfg))));
+
+  r.post("/whatsapp-connect/complete", async (c) => {
+    if (!connectCfg.appId || !connectCfg.embeddedSignupConfigId || !connectCfg.appSecret) return c.json({ error: "not configured" }, 501);
+    const input = parseConnectInput(await c.req.json().catch(() => null));
+    if (!input) return c.json({ error: "invalid input" }, 400);
+    try {
+      const result = await completeWhatsAppOnboarding(connectCfg, input, deps.fetchImpl ?? fetch);
+      deps.log.info({ event: "whatsapp_connected", wabaId: result.wabaId, subscribed: result.subscribed, numbers: result.numbers.map((n) => n.id) }, "WhatsApp number connected");
+      await repo.audit(db, "admin", "whatsapp_connect", "waba", result.wabaId);
+      return c.json(result);
+    } catch (err) {
+      const message = err instanceof ConnectError ? err.message : "unexpected error";
+      deps.log.warn({ event: "whatsapp_connect_failed", error: message }, "WhatsApp connect failed");
+      return c.json({ error: message }, 502);
+    }
   });
 
   r.post("/kb/reload", async (c) => {

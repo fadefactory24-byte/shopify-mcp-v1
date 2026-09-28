@@ -622,3 +622,81 @@ describe("pipeline reliability", () => {
     expect(lastSent()!.body).toBe("שלום!"); // in-step expectations held
   });
 });
+
+describe("admin: connect a WhatsApp Business app number (Embedded Signup)", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+  const complete = (body: unknown, headers: Record<string, string> = auth) =>
+    h.app.request("http://localhost/admin/whatsapp-connect/complete", { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body) });
+
+  async function configured() {
+    await h.db.close();
+    h.processor.stopTimers();
+    h = await createHarness({ META_APP_ID: "111222333", WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID: "987654321", WHATSAPP_GRAPH_VERSION: "v25.0" });
+  }
+
+  it("page needs auth, explains when unconfigured, and carries the Embedded Signup settings when configured", async () => {
+    expect((await h.app.request("http://localhost/admin/whatsapp-connect")).status).toBe(401);
+    expect(await (await h.app.request("http://localhost/admin/whatsapp-connect", { headers: auth })).text()).toContain("Not configured");
+    await configured();
+    const page = await (await h.app.request("http://localhost/admin/whatsapp-connect", { headers: auth })).text();
+    expect(page).toContain('{"appId":"111222333","configId":"987654321","version":"v25.0"}');
+    expect(page).toContain("whatsapp_business_app_onboarding");
+    expect(page).toContain("https://connect.facebook.net/en_US/sdk.js");
+    expect(await (await h.app.request("http://localhost/admin", { headers: auth })).text()).toContain("/admin/whatsapp-connect");
+  });
+
+  it("exchanges the code, subscribes the app to the WABA, reports the number, and never returns the token", async () => {
+    await configured();
+    const calls: { url: string; method: string; auth: string | null }[] = [];
+    h.setMetaFetch(async (input, init) => {
+      const url = String(input);
+      const headers = new Headers(init?.headers);
+      calls.push({ url, method: init?.method ?? "GET", auth: headers.get("authorization") });
+      const json = url.includes("/oauth/access_token")
+        ? { access_token: "BIZ-TOKEN-SECRET", token_type: "bearer" }
+        : url.includes("/subscribed_apps")
+          ? { success: true }
+          : { id: "555000", display_phone_number: "+972 53-536-6356", verified_name: "BABITO", platform_type: "CLOUD_API", is_on_biz_app: true };
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const res = await complete({ code: "one-time-code", waba_id: "444000", phone_number_id: "555000" });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain("BIZ-TOKEN-SECRET");
+    expect(JSON.parse(text)).toEqual({
+      wabaId: "444000",
+      subscribed: true,
+      numbers: [{ id: "555000", display_phone_number: "+972 53-536-6356", verified_name: "BABITO", platform_type: "CLOUD_API", is_on_biz_app: true }],
+    });
+    expect(calls[0]!.url).toMatch(/^https:\/\/graph\.facebook\.com\/v25\.0\/oauth\/access_token\?client_id=111222333&client_secret=test-app-secret&code=one-time-code$/);
+    expect(calls[1]).toEqual({ url: "https://graph.facebook.com/v25.0/444000/subscribed_apps", method: "POST", auth: "Bearer BIZ-TOKEN-SECRET" });
+    expect(calls[2]!.url).toContain("/555000?fields=");
+    expect((await h.q("select action, entity_id from audit_log where action = 'whatsapp_connect'"))[0]).toEqual({ action: "whatsapp_connect", entity_id: "444000" });
+  });
+
+  it("without a phone number id it lists the WABA's numbers", async () => {
+    await configured();
+    h.setMetaFetch(async (input) => {
+      const url = String(input);
+      const json = url.includes("/oauth/") ? { access_token: "t" } : url.includes("/subscribed_apps") ? { success: true } : { data: [{ id: "1", is_on_biz_app: true }] };
+      return new Response(JSON.stringify(json), { status: 200 });
+    });
+    const res = await complete({ code: "c", waba_id: "444000" });
+    expect((await res.json()).numbers).toEqual([{ id: "1", is_on_biz_app: true }]);
+  });
+
+  it("rejects bad input, cross-origin posts and reports Meta errors without leaking the secret", async () => {
+    expect((await complete({ code: "c", waba_id: "444000" })).status).toBe(501); // not configured
+    await configured();
+    expect((await complete({ code: "", waba_id: "444000" })).status).toBe(400);
+    expect((await complete({ code: "c", waba_id: "abc" })).status).toBe(400);
+    expect((await complete({ code: "c", waba_id: "444000", phone_number_id: "1; drop" })).status).toBe(400);
+    expect((await complete({ code: "c", waba_id: "444000" }, { ...auth, Origin: "https://evil.example" })).status).toBe(403);
+    h.setMetaFetch(async () => new Response(JSON.stringify({ error: { message: "This authorization code has expired." } }), { status: 400 }));
+    const res = await complete({ code: "c", waba_id: "444000" });
+    expect(res.status).toBe(502);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ error: "This authorization code has expired." });
+    expect(text).not.toContain("test-app-secret");
+  });
+});

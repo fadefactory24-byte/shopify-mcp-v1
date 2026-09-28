@@ -37,6 +37,9 @@ const ConfigSchema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_GRAPH_VERSION: z.string().default("v23.0"),
   WHATSAPP_TYPING_INDICATOR: bool(true),
+  /** Only for /admin/whatsapp-connect (Embedded Signup for a WhatsApp Business app number). */
+  META_APP_ID: z.string().optional().default(""),
+  WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional().default(""),
 
   // Shopify Admin GraphQL API
   SHOPIFY_STORE_DOMAIN: z.string().min(1), // e.g. my-store.myshopify.com

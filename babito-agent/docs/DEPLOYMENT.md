@@ -61,6 +61,19 @@ Three more switches, or messages never arrive (no error anywhere, the webhook ju
 - **Register the number** with the Cloud API: `POST /<PHONE_NUMBER_ID>/register` with `{"messaging_product":"whatsapp","pin":"<6 digits>"}`. Until then the number's `status` is `PENDING`, sends fail with `133010 Account not registered`, and WhatsApp users see "not on WhatsApp". Keep the PIN; it's the number's two-step PIN.
 - **Subscribe the WABA to the app**: `POST /<WABA_ID>/subscribed_apps`. Needs a token with `whatsapp_business_management` and full control of the WABA; the bot's messaging-only system-user token can't do it (a temporary token from the dashboard's "Generate token" can). Check with `GET` on the same path: your app must be listed.
 
+### Keeping the WhatsApp Business app on the same number (coexistence)
+
+Staff keep answering from the phone app; the bot answers too and goes quiet in any chat where staff reply from the app (their messages arrive as `smb_message_echoes` and switch the chat to human mode).
+
+1. Meta app → Facebook Login for Business → Configurations → **Create from template** → "WhatsApp Embedded Signup configuration with 60-day token". Copy its configuration id.
+2. Facebook Login for Business → Settings: *Login with the JavaScript SDK* = Yes, *Allowed domains for the JavaScript SDK* = `https://<your-domain>/`. App settings → Basic → *App domains* = `<your-domain>`.
+3. Webhooks (Whatsapp Business Account): also subscribe `smb_message_echoes` and `account_update`.
+4. Set `META_APP_ID` and `WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID`, deploy, open `https://<your-domain>/admin/whatsapp-connect` on a computer, and follow the page (Facebook sign-in → business portfolio → *connect existing WhatsApp Business app* → scan the QR code with the app, version 2.24.17+). The page subscribes the app to the new WhatsApp account and shows its phone number id.
+5. Business settings → System users → the bot's user → **Assign assets** → the new WhatsApp account (messages). Then set `WHATSAPP_PHONE_NUMBER_ID` to the new id and deploy.
+6. In the WhatsApp Business app, turn off the greeting and away messages (otherwise customers get two answers).
+
+Meta lists this flow for Tech Providers; for an app onboarding its own business's number it works with standard access. Coexistence limits: 20 messages/second; some app features stop (disappearing/view-once messages, new broadcast lists, live location). To undo: in the app, Settings → Account → Business Platform → Disconnect.
+
 Send a message to the business number. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin`.
 
 ## 6. Scheduled jobs

@@ -25,7 +25,13 @@ export interface AppDeps {
     adminPassword: string;
     cronSecret: string;
     production: boolean;
+    /** Embedded Signup page (/admin/whatsapp-connect); optional. */
+    metaAppId?: string;
+    embeddedSignupConfigId?: string;
+    graphVersion?: string;
   };
+  /** Outgoing HTTP for the admin's Meta calls; tests inject a fake. */
+  fetchImpl?: typeof fetch;
 }
 
 export function safeEqual(a: string, b: string): boolean {

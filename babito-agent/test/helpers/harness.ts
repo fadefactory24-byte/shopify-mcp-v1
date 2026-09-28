@@ -31,6 +31,8 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   const notifier = new FakeNotifier();
   const tracking = new FakeTracking();
   const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking });
+  /** Fake Graph API for the admin's Embedded Signup calls; tests replace it. */
+  let metaFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "no fake set" } }), { status: 500 });
   const app = createApp({
     db,
     log,
@@ -44,7 +46,11 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
       adminPassword: cfg.ADMIN_PASSWORD,
       cronSecret: cfg.CRON_SECRET,
       production: false,
+      metaAppId: cfg.META_APP_ID,
+      embeddedSignupConfigId: cfg.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID,
+      graphVersion: cfg.WHATSAPP_GRAPH_VERSION,
     },
+    fetchImpl: (...args: Parameters<typeof fetch>) => metaFetch(...args),
   });
 
   /** POST a signed webhook payload, like Meta does. */
@@ -67,7 +73,11 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     return (await db.query<T>(sql, params)).rows;
   }
 
-  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, processor: services.processor };
+  const setMetaFetch = (f: typeof fetch) => {
+    metaFetch = f;
+  };
+
+  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, setMetaFetch, processor: services.processor };
 }
 
 export type Harness = Awaited<ReturnType<typeof createHarness>>;
