@@ -1,9 +1,19 @@
 export type Lang = "ar" | "he" | "en";
 
+// Arabic written in Latin letters: digits standing for Arabic sounds inside words (3andkom, 7abibi, 2desh), or common words.
+const ARABIZI_DIGIT_WORD = /\b[a-z]*[235789][a-z]+\b/i;
+const ARABIZI_WORDS = /\b(shu|sho|shou|kif|keef|baddi|badde|bdi|3and\w*|mar7aba|ahlan|yalla|wen|wein|mnih|mni7|ktir|kteer|lesh|leesh|mish|mesh|shukran|habibi|inshallah|ya3ni|tayeb|tamam|adesh|addesh|2desh|hal2a|bukra|ma3|kam)\b/gi;
+
+function looksLikeArabizi(text: string): boolean {
+  return ARABIZI_DIGIT_WORD.test(text) || (text.match(ARABIZI_WORDS)?.length ?? 0) >= 2;
+}
+
 /**
- * Cheap script-based language detection. Mixed messages ("وين طلبي אחי")
- * resolve to the dominant script. Returns null when there is no signal
- * (emoji, digits, order numbers) so the caller keeps the previous language.
+ * Cheap script-based language detection. Arabic or Hebrew script wins over
+ * Latin (customers paste Latin product names: "شو الفرق بين SkyLift Pro و Lite"),
+ * mixed Arabic/Hebrew resolves to the dominant of the two, and Arabizi counts
+ * as Arabic. Returns null when there is no signal (emoji, digits, order
+ * numbers) so the caller keeps the previous language.
  */
 export function detectLanguage(text: string): Lang | null {
   let ar = 0;
@@ -15,11 +25,10 @@ export function detectLanguage(text: string): Lang | null {
     else if (c >= 0x0590 && c <= 0x05ff) he++;
     else if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) latin++;
   }
-  const total = ar + he + latin;
-  if (total < 2) return null;
-  if (ar >= he && ar >= latin) return "ar";
-  if (he >= ar && he >= latin) return "he";
-  return "en";
+  if (ar + he >= 2 && (ar + he) * 4 >= ar + he + latin) return ar >= he ? "ar" : "he";
+  if (latin >= 2) return looksLikeArabizi(text) ? "ar" : "en";
+  if (ar + he >= 2) return ar >= he ? "ar" : "he";
+  return null;
 }
 
 /**

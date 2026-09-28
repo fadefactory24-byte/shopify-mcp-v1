@@ -16,6 +16,12 @@ describe("language detection", () => {
   it("mixed Hebrew-dominant", () => expect(detectLanguage("אחי איפה ההזמנה שלי يا")).toBe("he"));
   it("returns null without signal", () => expect(detectLanguage("#1001 👍")).toBeNull());
   it("English", () => expect(detectLanguage("where is my order")).toBe("en"));
+  it("Arabic with Latin product names stays Arabic", () => expect(detectLanguage("شو الفرق بين SkyLift Pro و SkyLift Lite؟")).toBe("ar"));
+  it("Hebrew with a Latin brand stays Hebrew", () => expect(detectLanguage("כמה עולה ה-VELORA?")).toBe("he"));
+  it("Arabizi with digit letters is Arabic", () => expect(detectLanguage("3andkom 3arabaye 5afife lal baby?")).toBe("ar"));
+  it("Arabizi with common words is Arabic", () => expect(detectLanguage("shu fi 3arabiyat? baddi wa7de")).toBe("ar"));
+  it("English with a model number stays English", () => expect(detectLanguage("Do you have the SkyLift Pro in grey? order #1001")).toBe("en"));
+  it("English asking about a product with specs stays English", () => expect(detectLanguage("Is the camera 32GB or 64GB?")).toBe("en"));
 });
 
 describe("phone normalization", () => {
