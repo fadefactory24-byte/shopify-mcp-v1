@@ -40,7 +40,7 @@ export interface LLMRequest {
 export interface LLMResponse {
   content: ChatBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "refusal" | "other";
-  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number };
+  usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens?: number };
   raw?: unknown;
   model: string;
 }

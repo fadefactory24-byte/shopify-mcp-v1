@@ -61,6 +61,7 @@ export class AnthropicProvider implements LLMProvider {
         inputTokens: res.usage.input_tokens ?? 0,
         outputTokens: res.usage.output_tokens ?? 0,
         cacheReadTokens: res.usage.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: res.usage.cache_creation_input_tokens ?? 0,
       },
       raw: res.content,
       model: res.model,

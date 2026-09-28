@@ -57,7 +57,7 @@ describe("AnthropicProvider request contract", () => {
     expect(headers.get("anthropic-beta")).toContain("server-side-fallback-2026-07-01");
     expect(res.stopReason).toBe("tool_use");
     expect(res.content).toEqual([{ type: "tool_use", id: "tu_1", name: "search_products", input: { query: "מכשיר חנק" } }]);
-    expect(res.usage).toEqual({ inputTokens: 50, outputTokens: 10, cacheReadTokens: 40 });
+    expect(res.usage).toEqual({ inputTokens: 50, outputTokens: 10, cacheReadTokens: 40, cacheWriteTokens: 0 });
     // Thinking blocks are kept in raw so they can be echoed back inside the tool loop.
     expect((res.raw as any[])[0].type).toBe("thinking");
   });

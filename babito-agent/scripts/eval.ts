@@ -19,6 +19,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import pino from "pino";
+import { AnthropicProvider } from "../src/agent/anthropic.js";
+import type { LLMProvider } from "../src/agent/llm.js";
 import { loadConfig } from "../src/config.js";
 import { buildServices } from "../src/services.js";
 import type { WhatsAppSender } from "../src/whatsapp/client.js";
@@ -26,7 +28,7 @@ import { createTestDb } from "../test/helpers/pglite.js";
 import { SCENARIOS, type Scenario } from "./eval-scenarios.js";
 import { PublicStorefrontShopify } from "./eval-storefront.js";
 
-// USD per million tokens: [uncached input, cache read, output]. Cache writes aren't tracked, so totals are a slight underestimate.
+// USD per million tokens: [uncached input, cache read, output]. Cache writes (5-minute TTL) cost 1.25x input and are counted separately.
 const PRICES: Record<string, [number, number, number]> = {
   "claude-opus-5": [5, 0.5, 25],
   "claude-opus-5-5": [4, 0.4, 20],
@@ -80,7 +82,18 @@ const handoffs: { phone: string; reason: string; summary: string | null }[] = []
 
 const db = await createTestDb();
 const log = pino({ level: process.env.LOG_LEVEL ?? "silent" });
+// Count cache-write tokens per scenario (agent_runs doesn't store them).
+let cacheWrites = 0;
+const anthropic = new AnthropicProvider({ apiKey: cfg.ANTHROPIC_API_KEY, refusalFallback: cfg.AI_REFUSAL_FALLBACK });
+const llm: LLMProvider = {
+  async complete(req) {
+    const res = await anthropic.complete(req);
+    cacheWrites += res.usage.cacheWriteTokens ?? 0;
+    return res;
+  },
+};
 const services = buildServices(cfg, db, log, {
+  llm,
   ...(storefront ? { shopify: storefront } : {}),
   whatsapp: capture,
   notifier: { notify: async (n) => void handoffs.push({ phone: n.customerWaId, reason: n.reason, summary: n.summary }) },
@@ -123,6 +136,7 @@ for (const s of scenarios) {
   idx++;
   const phone = `1555555${String(100 + idx).padStart(4, "0")}`; // fictional numbers; never match a real Shopify customer
   const turns: TurnResult[] = [];
+  cacheWrites = 0;
   let convId: string | null = null;
   let lastRunId: string | null = null;
   for (const [t, text] of s.turns.entries()) {
@@ -165,7 +179,7 @@ for (const s of scenarios) {
   checks.push({ name: "replied", pass: allReplies.trim().length > 0 });
   checks.push({ name: "no_failed_run", pass: !turns.some((t) => t.status === "failed"), detail: turns.map((t) => t.status ?? "-").join(",") });
   const tok = turns.reduce((a, t) => ({ input: a.input + t.tokens.input, cacheRead: a.cacheRead + t.tokens.cacheRead, output: a.output + t.tokens.output }), { input: 0, cacheRead: 0, output: 0 });
-  const usd = price ? (tok.input * price[0] + tok.cacheRead * price[1] + tok.output * price[2]) / 1e6 : 0;
+  const usd = price ? (tok.input * price[0] + cacheWrites * price[0] * 1.25 + tok.cacheRead * price[1] + tok.output * price[2]) / 1e6 : 0;
   results.push({ scenario: s, turns, finalMode, checks, usd });
   const ok = checks.every((c) => c.pass);
   console.log(`${ok ? "PASS" : "FAIL"}  ${s.id.padEnd(24)} $${usd.toFixed(3)}  ${turns.map((t) => t.tools.join("+") || "-").join(" | ")}`);
