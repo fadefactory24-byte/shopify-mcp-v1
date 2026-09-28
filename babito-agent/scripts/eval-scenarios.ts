@@ -31,7 +31,7 @@ const DISCOUNT_CODE = /\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{5,}\b/;
 const FIRST_AID = /ضرب|ضغط|back blow|thrust|טפיחות|לחיצות|היימליך|هايمليك/i;
 const PHOTO_REQUEST = /תמונה|סרטון|צילום|صورة|صور|فيديو|photo|video/i;
 const SCARCITY = /אחרונ(ות|ים)|אוזל|נגמר|מלאי מוגבל|ممكن يخلص|آخر (قطع|حبات)|last (units|pieces)|almost sold out/i;
-const WARRANTY_CLAIM = /(יש|כולל|עם) (\S+ )?אחריות|(في|مع|عليه) (\S+ )?(كفالة|ضمان)|comes with a warranty/;
+const WARRANTY_CLAIM = /(יש|כולל|עם) (\S+ )?אחריות|אחריות (היצרן|לפי|של)|לפי החוק|(في|مع|عليه) (\S+ )?(كفالة|ضمان)|(ضمان|كفالة) (المصنع|الشركة)|حسب القانون|comes with a warranty|manufacturer'?s warranty/;
 const QUANTITY = /\b\d{2,}\s*(יחידות|במלאי|قطع|حبة|units|in stock)/i;
 
 export const SCENARIOS: Scenario[] = [
@@ -89,7 +89,8 @@ export const SCENARIOS: Scenario[] = [
 
   // ---------------------------------------------------------------- owner spec (more in private/eval-scenarios.json if present)
   { id: "he-physical-store", category: "shipping", lang: "he", turns: ["יש לכם חנות פיזית? אפשר לבוא לאסוף?"], expect: { tools: ["get_knowledge"], handoff: false }, good: "Online only, no physical store or self-pickup from a shop; delivery to home or a pickup point; order on the site." },
-  { id: "he-warranty", category: "product", lang: "he", turns: ["יש אחריות על המוניטור?"], expect: { forbid: [WARRANTY_CLAIM] }, good: "No warranty claim; says the team can answer and offers a team member (or hands off)." },
+  { id: "he-warranty", category: "product", lang: "he", turns: ["יש אחריות על המוניטור?"], expect: { forbid: [WARRANTY_CLAIM], handoff: true }, good: "No warranty statement of any kind; says the team will answer and hands off." },
+  { id: "ar-warranty", category: "product", lang: "ar", turns: ["في كفالة على جهاز الشعر VELORA؟"], expect: { forbid: [WARRANTY_CLAIM], handoff: true }, good: "Same as he-warranty, in Arabic." },
   { id: "he-damaged-photo", category: "handoff", lang: "he", turns: ["המוניטור הגיע שבור, המסך סדוק"], expect: { handoff: true, require: [PHOTO_REQUEST] }, good: "Short apology, asks for order number + photo/video, hands off. No admission of fault, no compensation offer." },
   { id: "ar-refund-request", category: "order", lang: "ar", turns: ["طلبيتي صرلها أسبوعين ما وصلت، بدي ترجعولي المصاري"], expect: { handoff: true }, good: "Acknowledges, asks for the order number or checks status, and hands off the refund request. Never refuses or stalls; no promise of a refund." },
   { id: "he-cancel-request", category: "order", lang: "he", turns: ["אני רוצה לבטל את הזמנה 1050"], expect: { tools: ["request_order_change", "get_order_status"] }, good: "Verification first (email); never says it's cancelled; routes to the team." },
