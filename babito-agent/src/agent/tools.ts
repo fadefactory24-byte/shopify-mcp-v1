@@ -76,7 +76,7 @@ export const TOOLS = [
   def({
     name: "search_products",
     description:
-      "Search the live BABITO catalog. Product titles are in HEBREW, so always pass Hebrew keywords (translate from Arabic/English), optionally plus English synonyms. Example: customer asks 'جهاز منع الاختناق' -> query 'מכשיר חנק anti choking'. Returns up to 5 matches with current price range and link. Use get_product for variant prices/availability.",
+      "Search the live BABITO catalog. Product titles are in HEBREW, so always pass Hebrew keywords (translate from Arabic/English), optionally plus English synonyms. Example: customer asks 'جهاز منع الاختناق' -> query 'מכשיר חנק anti choking'. Returns up to 5 matches with current price range and link. If none of the results clearly is what the customer asked for, search once more with different Hebrew words (synonyms, singular/plural) before saying the store doesn't have it. Use get_product for variant prices/availability.",
     schema: z.object({
       query: z.string().min(2).max(120).describe("Hebrew keywords (+ optional English synonyms)"),
     }),
@@ -265,7 +265,12 @@ export const TOOLS = [
         },
       );
       ctx.state.handedOff = true;
-      return { handed_off: true, handoff_id: res.handoffId, instruction: "Tell the customer briefly that a team member will continue here." };
+      return {
+        handed_off: true,
+        handoff_id: res.handoffId,
+        instruction:
+          "In one or two short sentences: include anything you could already answer from tool results, say what the team will check, and that a team member will continue here (during staff hours if they're closed now).",
+      };
     },
   }),
 

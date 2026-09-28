@@ -11,6 +11,7 @@ export const CATALOG_QUERY = /* GraphQL */ `
         vendor
         tags
         onlineStoreUrl
+        description(truncateAt: 600)
         priceRangeV2 { minVariantPrice { amount currencyCode } maxVariantPrice { amount currencyCode } }
         compareAtPriceRange { maxVariantCompareAtPrice { amount } }
       }

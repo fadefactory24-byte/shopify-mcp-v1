@@ -11,6 +11,8 @@ export interface CatalogItem {
   productType: string;
   vendor: string;
   tags: string[];
+  /** Plain-text start of the description; used for search ranking only (29 of 42 products have no tags). */
+  description?: string;
   url: string;
   priceMin: number;
   priceMax: number;
@@ -125,11 +127,13 @@ export function searchCatalog(items: CatalogItem[], query: string, limit = 5): C
   const scored = items.map((item) => {
     const title = norm(item.title);
     const meta = norm([item.productType, item.tags.join(" "), item.handle.replace(/-/g, " "), item.vendor].join(" "));
+    const desc = norm(item.description ?? "");
     let score = 0;
     for (const t of terms) {
       if (title.includes(t)) score += 3;
       else if (meta.includes(t)) score += 2;
       else if (t.length >= 4 && (title.includes(t.slice(0, -1)) || meta.includes(t.slice(0, -1)))) score += 1; // crude plural/suffix tolerance
+      else if (t.length >= 3 && desc.includes(t)) score += 1; // untagged products are often only findable by their description
     }
     return { item, score };
   });
@@ -220,6 +224,7 @@ export class LiveShopifyService implements ShopifyService {
           productType: p.productType ?? "",
           vendor: p.vendor ?? "",
           tags: p.tags ?? [],
+          description: p.description ?? "",
           url: p.onlineStoreUrl ?? `${this.opts.storePublicUrl}/products/${p.handle}`,
           priceMin: Number(p.priceRangeV2.minVariantPrice.amount),
           priceMax: Number(p.priceRangeV2.maxVariantPrice.amount),

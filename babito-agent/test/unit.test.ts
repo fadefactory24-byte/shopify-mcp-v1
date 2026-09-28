@@ -127,6 +127,11 @@ describe("catalog search", () => {
     expect(searchCatalog(CATALOG, "anti choking")[0]?.id).toBe(CHOKING_ID);
   });
   it("returns nothing for unrelated queries", () => expect(searchCatalog(CATALOG, "טלוויזיה")).toEqual([]));
+  it("finds an untagged product through its description, ranked below title matches", () => {
+    const mat = { ...CATALOG[1]!, id: "gid://shopify/Product/1", title: "משטח פעילות לילדים", productType: "", tags: [], handle: "x", description: "רצפה עשויה קצף EVA רך לפינת משחק" };
+    expect(searchCatalog([...CATALOG, mat], "רצפה משחק")[0]?.id).toBe(mat.id);
+    expect(searchCatalog([...CATALOG, mat], "משטח פעילות")[0]?.id).toBe(mat.id);
+  });
 });
 
 describe("order helpers", () => {

@@ -68,6 +68,7 @@ export class PublicStorefrontShopify implements ShopifyService {
         productType: p.product_type ?? "",
         vendor: p.vendor ?? "",
         tags: Array.isArray(p.tags) ? p.tags : String(p.tags ?? "").split(",").map((t) => t.trim()).filter(Boolean),
+        description: stripHtml(p.body_html ?? "").slice(0, 600),
         url: `${this.baseUrl}/products/${p.handle}`,
         priceMin: Math.min(...prices),
         priceMax: Math.max(...prices),
