@@ -349,6 +349,11 @@ export class MessageProcessor {
       }
       reply = fallback;
       status = "failed";
+      if (!result.flags.includes("model_refusal")) {
+        void this.deps.notifier
+          .systemAlert?.("AI could not answer", `The AI failed and the chat went to staff. Error: ${result.error ?? "unknown"}. If this repeats, check the Anthropic credit/API key and the server logs.`)
+          .catch(() => {});
+      }
     }
 
     await repo.finishRun(this.db, runId, {

@@ -347,6 +347,7 @@ describe("conversations", () => {
     expect(h.notifier.notices).toHaveLength(1);
     const [run] = await h.q("select status, error from agent_runs");
     expect(run.status).toBe("failed");
+    expect(h.notifier.alerts.map((a) => a.kind)).toEqual(["AI could not answer"]);
   });
 
   it("staff take over while the model is thinking: the AI reply is not sent on top of theirs", async () => {
