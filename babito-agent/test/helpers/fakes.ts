@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import type { ChatBlock, LLMProvider, LLMRequest, LLMResponse } from "../../src/agent/llm.js";
-import type { HandoffNotice, HandoffNotifier } from "../../src/pipeline/handoff.js";
+import type { HandoffNotice, HandoffNotifier, WaitingNotice } from "../../src/pipeline/handoff.js";
 import { ShopifyError } from "../../src/shopify/client.js";
 import type { CatalogItem, OrderDetail, ProductDetail, ShopifyService } from "../../src/shopify/service.js";
 import type { TrackingService, TrackingStatus } from "../../src/tracking/tracking.js";
@@ -166,8 +166,16 @@ export class FakeWhatsApp implements WhatsAppSender {
 
 export class FakeNotifier implements HandoffNotifier {
   notices: HandoffNotice[] = [];
+  waiting: WaitingNotice[] = [];
+  alerts: { kind: string; message: string }[] = [];
   async notify(n: HandoffNotice) {
     this.notices.push(n);
+  }
+  async customerWaiting(n: WaitingNotice) {
+    this.waiting.push(n);
+  }
+  async systemAlert(kind: string, message: string) {
+    this.alerts.push({ kind, message });
   }
 }
 

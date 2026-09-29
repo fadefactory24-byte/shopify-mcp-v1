@@ -242,6 +242,9 @@ export class MessageProcessor {
       if (Date.now() - last < this.cfg.humanModeTimeoutHours * 3600_000) {
         await repo.setInboundStatus(this.db, ids, "skipped");
         this.log.info({ event: "skipped_human_mode", conversationId }, "conversation in human mode; AI not replying");
+        void this.deps.notifier
+          .customerWaiting?.({ conversationId, customerWaId: customer.wa_id, customerName: customer.display_name, text: pending.map((p) => p.body).filter(Boolean).join("\n") || null })
+          .catch(() => {});
         return;
       }
       await repo.setMode(this.db, conversationId, "ai");
@@ -460,6 +463,9 @@ export class MessageProcessor {
     } catch (err) {
       await this.markSendFailed(msg.id, err);
       this.log.error({ event: "send_failed", conversationId: conv.id, err: (err as Error).message }, "failed to send WhatsApp reply");
+      void this.deps.notifier
+        .systemAlert?.("WhatsApp send failed", `A reply could not be sent to +${customer.wa_id}: ${(err as Error).message}. The sweeper retries temporary errors; permanent ones (e.g. outside the 24h window) need staff.`)
+        .catch(() => {});
       return msg;
     }
     // The customer has the message now. A bookkeeping error here must not mark it failed (the sweeper would resend it).

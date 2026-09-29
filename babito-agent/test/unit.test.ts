@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ResendEmail, StaffNotifier } from "../src/pipeline/handoff.js";
 import { extractPrices, isExplicitHumanRequest, ungroundedPrices } from "../src/agent/guardrails.js";
 import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
@@ -203,5 +204,53 @@ describe("formatting & history", () => {
     // 2026-09-27 is a Sunday; 07:00Z = 10:00 Israel (IDT)
     expect(businessClock(hours, new Date("2026-09-27T07:00:00Z")).staffAvailableNow).toBe(true);
     expect(businessClock(hours, new Date("2026-09-26T07:00:00Z")).staffAvailableNow).toBe(false);
+  });
+});
+
+describe("staff email alerts", () => {
+  const log = { warn: () => {}, info: () => {}, error: () => {} } as any;
+  const whatsapp = { sendText: async () => ({ waMessageId: "x" }) } as any;
+  function setup() {
+    const sent: { subject: string; text: string; key?: string }[] = [];
+    const email = { send: async (subject: string, text: string, key?: string) => void sent.push({ subject, text, key }) } as any;
+    let now = 1_000_000;
+    const n = new StaffNotifier({ webhookUrl: "", staffNumbers: [], whatsapp, adminBaseUrl: "https://bot.example", email, log, now: () => now });
+    return { n, sent, tick: (ms: number) => (now += ms) };
+  }
+
+  it("handoff email: urgent subject, admin link, idempotency key per handoff", async () => {
+    const { n, sent } = setup();
+    await n.notify({ handoffId: "h1", conversationId: "c1", customerWaId: "972501234567", customerName: "Dana", reason: "complaint", priority: "high", summary: "arrived broken", orderName: "#1374" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.subject).toBe("[BABITO] URGENT Handoff: complaint (order #1374): Dana +972501234567");
+    expect(sent[0]!.text).toContain("arrived broken");
+    expect(sent[0]!.text).toContain("https://bot.example/admin/conversations/c1");
+    expect(sent[0]!.key).toBe("handoff-h1");
+  });
+
+  it("customer-waiting and system alerts are throttled", async () => {
+    const { n, sent, tick } = setup();
+    const w = { conversationId: "c1", customerWaId: "972501234567", customerName: null, text: "hello?" };
+    await n.customerWaiting(w);
+    await n.customerWaiting(w);
+    await n.customerWaiting({ ...w, conversationId: "c2" });
+    expect(sent.map((s) => s.subject)).toEqual(["[BABITO] Customer waiting for staff: +972501234567", "[BABITO] Customer waiting for staff: +972501234567"]);
+    tick(31 * 60_000);
+    await n.customerWaiting(w);
+    expect(sent).toHaveLength(3);
+    await n.systemAlert("WhatsApp send failed", "boom");
+    await n.systemAlert("WhatsApp send failed", "boom again");
+    expect(sent.filter((s) => s.subject.includes("System alert"))).toHaveLength(1);
+  });
+
+  it("ResendEmail posts to Resend with the idempotency key and throws on errors", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const ok = new ResendEmail({ apiKey: "re_test", from: "BABITO Bot <onboarding@resend.dev>", to: ["support@mybabito.com"], fetchImpl: (async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response("{}", { status: 200 }); }) as any });
+    await ok.send("S", "T", "k1");
+    expect(calls[0]!.url).toBe("https://api.resend.com/emails");
+    expect((calls[0]!.init.headers as any)["Idempotency-Key"]).toBe("k1");
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ from: "BABITO Bot <onboarding@resend.dev>", to: ["support@mybabito.com"], subject: "S", text: "T" });
+    const bad = new ResendEmail({ apiKey: "x", from: "a", to: ["b"], fetchImpl: (async () => new Response("nope", { status: 403 })) as any });
+    await expect(bad.send("S", "T")).rejects.toThrow("email HTTP 403");
   });
 });

@@ -1,10 +1,10 @@
 import { AnthropicProvider } from "./agent/anthropic.js";
 import { KnowledgeService } from "./agent/knowledge.js";
 import type { LLMProvider } from "./agent/llm.js";
-import type { Config } from "./config.js";
+import { publicBaseUrl, type Config } from "./config.js";
 import type { Db } from "./db/client.js";
 import type { Logger } from "./logger.js";
-import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
+import { ResendEmail, StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
@@ -53,6 +53,11 @@ export function buildServices(
       webhookUrl: cfg.STAFF_NOTIFY_WEBHOOK_URL,
       staffNumbers: cfg.STAFF_WHATSAPP_NUMBERS.split(",").map((s) => s.trim()).filter(Boolean),
       whatsapp,
+      adminBaseUrl: publicBaseUrl(cfg),
+      email:
+        cfg.RESEND_API_KEY && cfg.STAFF_NOTIFY_EMAIL
+          ? new ResendEmail({ apiKey: cfg.RESEND_API_KEY, from: cfg.STAFF_NOTIFY_EMAIL_FROM, to: cfg.STAFF_NOTIFY_EMAIL.split(",").map((s) => s.trim()).filter(Boolean) })
+          : null,
       log,
     });
   const processor = new MessageProcessor(

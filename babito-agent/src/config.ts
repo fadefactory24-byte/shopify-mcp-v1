@@ -75,6 +75,12 @@ const ConfigSchema = z.object({
   // Staff notifications on handoff (both optional)
   STAFF_NOTIFY_WEBHOOK_URL: z.string().optional().default(""),
   STAFF_WHATSAPP_NUMBERS: z.string().optional().default(""),
+  /** Email alerts (handoffs, customers waiting for staff, system problems) via Resend. */
+  STAFF_NOTIFY_EMAIL: z.string().optional().default(""),
+  STAFF_NOTIFY_EMAIL_FROM: z.string().default("BABITO Bot <onboarding@resend.dev>"),
+  RESEND_API_KEY: z.string().optional().default(""),
+  /** Public https URL of this server, for links in alerts. Defaults to Railway's public domain. */
+  PUBLIC_BASE_URL: z.string().optional().default(""),
 
   // Admin dashboard / API (HTTP Basic auth, user "admin")
   ADMIN_PASSWORD: z.string().optional().default(""),
@@ -112,7 +118,14 @@ export function redactedConfigSummary(cfg: Config) {
     signatureCheck: Boolean(cfg.WHATSAPP_APP_SECRET),
     llm: { provider: cfg.LLM_PROVIDER, main: cfg.AI_MODEL_MAIN, effort: cfg.AI_MODEL_MAIN_EFFORT, fast: cfg.AI_MODEL_FAST },
     staffWebhook: Boolean(cfg.STAFF_NOTIFY_WEBHOOK_URL),
+    staffEmail: Boolean(cfg.RESEND_API_KEY && cfg.STAFF_NOTIFY_EMAIL),
     liveTracking: Boolean(cfg.SEVENTEENTRACK_API_KEY),
     adminEnabled: Boolean(cfg.ADMIN_PASSWORD),
   };
+}
+
+export function publicBaseUrl(cfg: Config): string {
+  if (cfg.PUBLIC_BASE_URL) return cfg.PUBLIC_BASE_URL.replace(/\/$/, "");
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
+  return railway ? `https://${railway}` : "";
 }

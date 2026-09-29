@@ -397,6 +397,8 @@ describe("conversations", () => {
     await h.customerSays(textWebhook(CUSTOMER_PHONE, "יש מישהו?", { id: "wamid.human" }));
     expect(h.whatsapp.reads).toContain("wamid.human"); // plain read receipt
     expect(h.whatsapp.typing).toEqual(["wamid.ai"]);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.notifier.waiting).toEqual([{ conversationId: conv.id, customerWaId: CUSTOMER_PHONE, customerName: expect.anything(), text: "יש מישהו?" }]);
   });
 
   it("voice note: polite text-only reply, no LLM cost", async () => {
