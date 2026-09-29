@@ -75,10 +75,17 @@ const ConfigSchema = z.object({
   // Staff notifications on handoff (both optional)
   STAFF_NOTIFY_WEBHOOK_URL: z.string().optional().default(""),
   STAFF_WHATSAPP_NUMBERS: z.string().optional().default(""),
-  /** Email alerts (handoffs, customers waiting for staff, system problems) via Resend. */
+  /** Staff alert emails (handoffs, customer waiting, system problems), sent from the support mailbox. */
   STAFF_NOTIFY_EMAIL: z.string().optional().default(""),
-  STAFF_NOTIFY_EMAIL_FROM: z.string().default("BABITO Bot <onboarding@resend.dev>"),
-  RESEND_API_KEY: z.string().optional().default(""),
+
+  // Email channel: the support mailbox (Microsoft 365) through Microsoft Graph, delegated access.
+  EMAIL_CHANNEL_ENABLED: bool(false),
+  EMAIL_MAILBOX: z.string().optional().default(""),
+  MS_TENANT_ID: z.string().default("organizations"),
+  MS_CLIENT_ID: z.string().optional().default(""),
+  /** Seed only: the server keeps the rotated token in integration_state afterwards. */
+  MS_REFRESH_TOKEN: z.string().optional().default(""),
+  EMAIL_POLL_SECONDS: int(60),
   /** Public https URL of this server, for links in alerts. Defaults to Railway's public domain. */
   PUBLIC_BASE_URL: z.string().optional().default(""),
 
@@ -118,7 +125,8 @@ export function redactedConfigSummary(cfg: Config) {
     signatureCheck: Boolean(cfg.WHATSAPP_APP_SECRET),
     llm: { provider: cfg.LLM_PROVIDER, main: cfg.AI_MODEL_MAIN, effort: cfg.AI_MODEL_MAIN_EFFORT, fast: cfg.AI_MODEL_FAST },
     staffWebhook: Boolean(cfg.STAFF_NOTIFY_WEBHOOK_URL),
-    staffEmail: Boolean(cfg.RESEND_API_KEY && cfg.STAFF_NOTIFY_EMAIL),
+    staffEmail: Boolean(cfg.MS_CLIENT_ID && cfg.STAFF_NOTIFY_EMAIL),
+    emailChannel: cfg.EMAIL_CHANNEL_ENABLED && Boolean(cfg.MS_CLIENT_ID),
     liveTracking: Boolean(cfg.SEVENTEENTRACK_API_KEY),
     adminEnabled: Boolean(cfg.ADMIN_PASSWORD),
   };

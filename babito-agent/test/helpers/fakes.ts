@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { ChatBlock, LLMProvider, LLMRequest, LLMResponse } from "../../src/agent/llm.js";
 import type { HandoffNotice, HandoffNotifier, WaitingNotice } from "../../src/pipeline/handoff.js";
+import type { InboxMessage, MailApi, SentMessage } from "../../src/email/graph.js";
 import { ShopifyError } from "../../src/shopify/client.js";
 import type { CatalogItem, OrderDetail, ProductDetail, ShopifyService } from "../../src/shopify/service.js";
 import type { TrackingService, TrackingStatus } from "../../src/tracking/tracking.js";
@@ -112,6 +113,11 @@ export class FakeShopify implements ShopifyService {
   async findOrdersByPhone(phone: string) {
     this.check("findOrdersByPhone");
     const mine = this.orders.filter((o) => o.contact.phones.some((p) => p.replace(/\D/g, "").endsWith(phone.slice(-9))));
+    return mine.length ? { customerId: "gid://shopify/Customer/1", firstName: "Dana", orders: mine } : null;
+  }
+  async findOrdersByEmail(email: string) {
+    this.check("findOrdersByEmail");
+    const mine = this.orders.filter((o) => o.contact.emails.includes(email.toLowerCase()));
     return mine.length ? { customerId: "gid://shopify/Customer/1", firstName: "Dana", orders: mine } : null;
   }
   async getPolicies() {
@@ -262,4 +268,51 @@ export function statusWebhook(waMessageId: string, status: string) {
 
 export function sign(body: string, secret: string) {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+}
+
+// ------------------------------------------------------------------ Email (Microsoft Graph)
+
+export class FakeMail implements MailApi {
+  inbox: InboxMessage[] = [];
+  sent: SentMessage[] = [];
+  replies: { messageId: string; text: string; id: string }[] = [];
+  mails: { to: string[]; subject: string; text: string }[] = [];
+  flags: { messageId: string; category: string }[] = [];
+  private n = 0;
+  async listInbox(since: Date) {
+    return this.inbox.filter((m) => new Date(m.receivedAt) >= since);
+  }
+  async listSent(since: Date) {
+    return this.sent.filter((m) => new Date(m.sentAt) >= since);
+  }
+  async reply(messageId: string, text: string) {
+    const id = `sent-${++this.n}`;
+    this.replies.push({ messageId, text, id });
+    const to = this.inbox.find((m) => m.id === messageId)?.fromAddress ?? "unknown@example.com";
+    this.sent.push({ id, toAddresses: [to], text, sentAt: new Date().toISOString() });
+    return id;
+  }
+  async sendMail(to: string[], subject: string, text: string) {
+    this.mails.push({ to, subject, text });
+  }
+  async flagForStaff(messageId: string, category: string) {
+    this.flags.push({ messageId, category });
+  }
+  /** A customer email arriving now. */
+  receive(from: string, text: string, opts: Partial<InboxMessage> = {}) {
+    const m: InboxMessage = {
+      id: `in-${++this.n}`,
+      conversationId: "conv-1",
+      subject: "שאלה",
+      fromAddress: from,
+      fromName: "Dana Levi",
+      receivedAt: new Date(Date.now() + 1000).toISOString(),
+      text,
+      hasAttachments: false,
+      headers: {},
+      ...opts,
+    };
+    this.inbox.push(m);
+    return m;
+  }
 }

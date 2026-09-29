@@ -39,6 +39,10 @@ const sweeper = setInterval(() => {
 }, cfg.SWEEPER_INTERVAL_MS);
 services.processor.sweep().catch(() => {});
 
+// Email channel: poll the support mailbox.
+const emailPoll = services.email ? setInterval(() => void services.email!.poll(), cfg.EMAIL_POLL_SECONDS * 1000) : null;
+if (services.email) void services.email.poll();
+
 // Daily retention purge, so no external cron is needed. First run 10 minutes after start (not during a deploy).
 const maintenanceMs = cfg.MAINTENANCE_INTERVAL_HOURS * 3600_000;
 const maintain = () => runMaintenance(db, logger).catch((err) => logger.error({ err: String(err) }, "maintenance failed"));
@@ -51,6 +55,7 @@ async function shutdown(signal: string) {
   stopping = true;
   logger.info({ signal }, "shutting down");
   clearInterval(sweeper);
+  if (emailPoll) clearInterval(emailPoll);
   if (maintenanceStart) clearTimeout(maintenanceStart);
   if (maintenance) clearInterval(maintenance);
   server.close();

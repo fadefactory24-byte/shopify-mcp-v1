@@ -11,7 +11,7 @@
 | **Shopify Admin API access** | Shopify no longer allows *new* admin-created custom apps (`shpat_…` tokens), so create an app in the **Dev Dashboard** (dev.shopify.com), install it on the BABITO store, and use its client ID + secret (`SHOPIFY_CLIENT_ID` / `SHOPIFY_CLIENT_SECRET`; the token refreshes automatically). An existing `shpat_` token still works if you already have one. Scopes: `read_products, read_orders, read_customers, read_fulfillments, read_legal_policies` (+ `read_all_orders` for orders older than 60 days). **Read-only is enough.** |
 | **Anthropic API key** | console.anthropic.com → API keys → `ANTHROPIC_API_KEY`. |
 | Recommended: **17TRACK API key** | api.17track.net → register → API key → `SEVENTEENTRACK_API_KEY`. Shopify fulfillments have tracking numbers but no carrier updates; with this key order answers use the live stage (in transit, final leg, out for delivery, delivered...). Only parcels customers ask about are registered, one quota unit each. Accounts created since 7 Jan 2026 get 200 free tracking numbers once (no monthly allowance); after that a paid plan. No webhook is needed (the bot asks on demand) and leave the IP whitelist empty (Railway's outgoing IPs change). When the quota runs out, answers fall back to the Shopify stage. |
-| Recommended: staff email alerts | Free account at resend.com created with the staff mailbox (e.g. support@mybabito.com) → API key → `RESEND_API_KEY`, and `STAFF_NOTIFY_EMAIL=support@mybabito.com`. Emails: every handoff (urgent ones marked), a customer writing while the chat is with staff (at most every 30 min per chat), and system problems such as undeliverable replies (at most hourly). Each links to the chat in `/admin`. The default sender `onboarding@resend.dev` only delivers to the Resend account's own address; verify your domain in Resend to use another sender. |
+| Recommended: support mailbox (Microsoft 365) | Email channel + staff alert emails through Microsoft Graph; see *Email channel* below. |
 | Optional: staff notification webhook | An n8n/Make/Slack incoming webhook URL → `STAFF_NOTIFY_WEBHOOK_URL`. |
 
 ## 2. Local development
@@ -76,6 +76,14 @@ Staff keep answering from the phone app; the bot answers too and goes quiet in a
 Meta documents this flow for Tech Providers; here it is used by the business's own app for its own number, so if Meta refuses it at sign-in, the fallback is Tech Provider enrollment (App dashboard → Become Tech Provider, needs business verification). Coexistence limits: 20 messages/second; some app features stop (disappearing/view-once messages, new broadcast lists, live location). To undo: in the app, Settings → Account → Business Platform → Disconnect.
 
 Send a message to the business number. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin`.
+
+## 5b. Email channel (support mailbox, Microsoft 365)
+
+The agent reads new customer emails in the support mailbox and answers in the same thread, with the same rules as WhatsApp (the sender address is the verified identity for orders; handoffs flag the email for staff with the category "BABITO: needs staff"; a reply staff send themselves from Outlook puts the conversation in human mode). Automated mail (no-reply, platforms, mailing lists, auto-replies) and the mailbox's own messages are never answered, and only mail received after the channel starts is processed. Staff alert emails (handoffs, customer waiting, system problems) are sent from the same mailbox to `STAFF_NOTIFY_EMAIL`.
+
+1. entra.microsoft.com → App registrations → New registration: name "BABITO Agent Mail", single tenant. Authentication → *Allow public client flows* = Yes. API permissions → Microsoft Graph → Delegated: `Mail.ReadWrite`, `Mail.Send`, `User.Read`, `offline_access` (no admin-wide application permission: access is limited to the mailbox that signs in).
+2. `MS_CLIENT_ID=<Application (client) ID> MS_TENANT_ID=<Directory (tenant) ID> npx tsx scripts/connect-outlook.ts private/secrets.env`, sign in **as the support mailbox** at microsoft.com/devicelogin and accept.
+3. Set `MS_CLIENT_ID`, `MS_TENANT_ID`, `MS_REFRESH_TOKEN` (secret), `EMAIL_MAILBOX`, `STAFF_NOTIFY_EMAIL`, `EMAIL_CHANNEL_ENABLED=true`; apply the migrations; deploy. The log shows `emailChannel: true`.
 
 ## 6. Scheduled jobs
 

@@ -753,3 +753,109 @@ describe("admin: Embedded Signup diagnostics", () => {
     expect((await h.app.request("http://localhost/admin/whatsapp-connect/inspect", { method: "POST", headers: { ...auth, "content-type": "application/json" }, body: "{}" })).status).toBe(400);
   });
 });
+
+describe("email channel (support mailbox)", () => {
+  async function emailHarness() {
+    await h.db.close();
+    h.processor.stopTimers();
+    h = await createHarness({ EMAIL_CHANNEL_ENABLED: "true", EMAIL_MAILBOX: "support@mybabito.com" });
+    await h.email!.poll(); // first poll only sets the watermark
+  }
+  const round = async () => {
+    await h.email!.poll();
+    await h.processor.drain();
+  };
+
+  it("first poll never answers old mail; a new customer email is answered in the same thread with email rules", async () => {
+    await h.db.close();
+    h.processor.stopTimers();
+    h = await createHarness({ EMAIL_CHANNEL_ENABLED: "true", EMAIL_MAILBOX: "support@mybabito.com" });
+    h.mail.receive("old@example.com", "old question", { receivedAt: new Date(Date.now() - 3600_000).toISOString() });
+    await h.email!.poll();
+    await h.processor.drain();
+    expect(h.mail.replies).toHaveLength(0);
+
+    h.llm.push((req) => {
+      const system = JSON.stringify(req);
+      expect(system).toContain("CHANNEL: EMAIL");
+      expect(system).toContain("CUSTOMER: emails from dana@example.com");
+      return say("שלום דנה,\nמשלוח לנקודת איסוף חינם.\n\nצוות BABITO")(req);
+    });
+    const m = h.mail.receive("Dana@Example.com", "כמה עולה משלוח?", { subject: "משלוח" });
+    await round();
+    expect(h.mail.replies).toEqual([{ messageId: m.id, text: "שלום דנה,\nמשלוח לנקודת איסוף חינם.\n\nצוות BABITO", id: expect.any(String) }]);
+    const [conv] = await h.q("select channel, mode from conversations");
+    expect(conv).toEqual({ channel: "email", mode: "ai" });
+    const [cust] = await h.q("select wa_id, display_name from customers");
+    expect(cust).toEqual({ wa_id: "email:dana@example.com", display_name: "Dana Levi" });
+    expect(h.whatsapp.sent).toHaveLength(0);
+
+    // The bot's own reply shows up in Sent Items: not mistaken for a staff reply.
+    await round();
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("ai");
+  });
+
+  it("automated, platform, mailing-list and own-mailbox emails get no AI answer", async () => {
+    await emailHarness();
+    h.mail.receive("no-reply@shop.example", "Your receipt");
+    h.mail.receive("orders@shopify.com", "New order");
+    h.mail.receive("friend@example.com", "Sale!", { headers: { "list-unsubscribe": "<mailto:x>" } });
+    h.mail.receive("friend2@example.com", "Away", { headers: { "auto-submitted": "auto-replied" } });
+    h.mail.receive("friend3@example.com", "", { subject: "Automatic reply: hello" });
+    h.mail.receive("support@mybabito.com", "[BABITO] Handoff alert");
+    await round();
+    expect(h.mail.replies).toHaveLength(0);
+    expect(await h.q("select count(*)::int n from messages")).toEqual([{ n: 0 }]);
+  });
+
+  it("a staff reply sent from Outlook puts the conversation in human mode; the AI stays quiet", async () => {
+    await emailHarness();
+    h.llm.push(say("תשובה ראשונה\n\nצוות BABITO"));
+    h.mail.receive("dana@example.com", "שאלה");
+    await round();
+    h.mail.sent.push({ id: "staff-1", toAddresses: ["dana@example.com"], text: "היי דנה, בודקים לך את זה עכשיו", sentAt: new Date(Date.now() + 2000).toISOString() });
+    await round();
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("human");
+    h.mail.receive("dana@example.com", "תודה, מחכה", { receivedAt: new Date(Date.now() + 3000).toISOString() });
+    await round();
+    expect(h.mail.replies).toHaveLength(1);
+    expect(h.notifier.waiting).toHaveLength(1);
+  });
+
+  it("order status by email: the sender address verifies the order; another order is refused", async () => {
+    await emailHarness();
+    h.llm.push(callTool("get_order_status", { order_number: "#1001" }), (req) => {
+      const [res] = lastToolResults(req);
+      expect(res!.content.verified).toBe(true);
+      return say("ההזמנה נשלחה.\n\nצוות BABITO")(req);
+    });
+    h.mail.receive("mom@example.com", "איפה הזמנה 1001?");
+    await round();
+    h.llm.push(callTool("get_order_status", { order_number: "#2002" }), (req) => {
+      const [res] = lastToolResults(req);
+      expect(res!.content.verified).toBe(false);
+      return say("ההזמנה הזאת לא רשומה על כתובת המייל הזאת.\n\nצוות BABITO")(req);
+    });
+    h.mail.receive("mom@example.com", "ומה עם 2002?", { receivedAt: new Date(Date.now() + 5000).toISOString() });
+    await round();
+    expect(h.mail.replies).toHaveLength(2);
+    h.llm.push(callTool("get_my_orders", {}), (req) => {
+      const [res] = lastToolResults(req);
+      expect(res!.content.found).toBe(true);
+      expect(res!.content.orders.map((o: any) => o.name)).toEqual(["#1001"]);
+      return say("מצאתי את ההזמנה שלך.\n\nצוות BABITO")(req);
+    });
+    h.mail.receive("mom@example.com", "מה ההזמנות שלי?", { receivedAt: new Date(Date.now() + 8000).toISOString() });
+    await round();
+    expect(h.mail.replies).toHaveLength(3);
+  });
+
+  it("explicit request for a human by email: handoff, expectation reply in the thread", async () => {
+    await emailHarness();
+    h.mail.receive("dana@example.com", "נציג בבקשה");
+    await round();
+    expect(h.notifier.notices.map((n) => n.customerWaId)).toEqual(["email:dana@example.com"]);
+    expect(h.mail.replies).toHaveLength(1);
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("human");
+  });
+});

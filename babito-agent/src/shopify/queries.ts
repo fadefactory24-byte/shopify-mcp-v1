@@ -96,6 +96,21 @@ export const CUSTOMER_BY_PHONE_QUERY = /* GraphQL */ `
   }
 `;
 
+export const CUSTOMER_BY_EMAIL_QUERY = /* GraphQL */ `
+  query CustomerByEmail($q: String!) {
+    customers(first: 5, query: $q) {
+      nodes {
+        id
+        firstName
+        defaultEmailAddress { emailAddress }
+        orders(first: 5, sortKey: CREATED_AT, reverse: true) {
+          nodes { ${ORDER_FIELDS} }
+        }
+      }
+    }
+  }
+`;
+
 export const POLICIES_QUERY = /* GraphQL */ `
   query Policies {
     shop { shopPolicies { type title body url } }

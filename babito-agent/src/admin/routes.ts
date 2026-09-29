@@ -3,6 +3,7 @@ import { basicAuth } from "hono/basic-auth";
 import { html } from "hono/html";
 import type { AppDeps } from "../app.js";
 import { repo } from "../db/repo.js";
+import { displayHandle } from "../email/channel.js";
 import { ConnectError, completeWhatsAppOnboarding, connectPageBody, inspectGrant, parseCode, parseConnectInput } from "./whatsapp-connect.js";
 
 /**
@@ -87,7 +88,7 @@ export function adminRoutes(deps: AppDeps) {
     ).rows;
     const convs = (
       await db.query<any>(
-        `select c.id, c.mode, c.language, c.last_message_at, cu.display_name, cu.wa_id,
+        `select c.id, c.mode, c.channel, c.language, c.last_message_at, cu.display_name, cu.wa_id,
            (select body from messages m where m.conversation_id = c.id and m.body is not null order by created_at desc limit 1) as last_body
          from conversations c join customers cu on cu.id = c.customer_id
          where c.status = 'open' and ($1::text is null or c.mode = $1)
@@ -116,7 +117,7 @@ export function adminRoutes(deps: AppDeps) {
             <tr><th>Customer</th><th>Reason</th><th>Summary</th><th>Since</th></tr>
             ${handoffs.map(
               (h) => html`<tr>
-                <td><a href="/admin/conversations/${h.conversation_id}">${h.display_name ?? ""} +${h.wa_id}</a></td>
+                <td><a href="/admin/conversations/${h.conversation_id}">${h.display_name ?? ""} ${displayHandle(h.wa_id)}</a></td>
                 <td><span class="pill ${h.priority === "high" ? "bad" : ""}">${h.reason}</span> ${h.order_name ?? ""}</td>
                 <td>${h.summary ?? ""}</td><td class="muted">${new Date(h.created_at).toLocaleString("he-IL")}</td>
               </tr>`,
@@ -127,8 +128,8 @@ export function adminRoutes(deps: AppDeps) {
             <tr><th>Customer</th><th>Mode</th><th>Last message</th><th>At</th></tr>
             ${convs.map(
               (cv) => html`<tr>
-                <td><a href="/admin/conversations/${cv.id}">${cv.display_name ?? "—"}</a><br /><span class="muted">+${cv.wa_id}</span></td>
-                <td><span class="pill ${cv.mode}">${cv.mode}</span> <span class="muted">${cv.language ?? ""}</span></td>
+                <td><a href="/admin/conversations/${cv.id}">${cv.display_name ?? "—"}</a><br /><span class="muted">${displayHandle(cv.wa_id)}</span></td>
+                <td><span class="pill ${cv.mode}">${cv.mode}</span> <span class="muted">${cv.channel === "email" ? "email" : "WhatsApp"} ${cv.language ?? ""}</span></td>
                 <td style="unicode-bidi:plaintext">${(cv.last_body ?? "").slice(0, 120)}</td>
                 <td class="muted">${new Date(cv.last_message_at).toLocaleString("he-IL")}</td>
               </tr>`,
@@ -159,7 +160,7 @@ export function adminRoutes(deps: AppDeps) {
     return c.html(
       page(
         customer.display_name ?? "Conversation",
-        html`<h1>${customer.display_name ?? "—"} <span class="muted">+${customer.wa_id}</span></h1>
+        html`<h1>${customer.display_name ?? "—"} <span class="muted">${displayHandle(customer.wa_id)}</span></h1>
           <p>
             Mode: <span class="pill ${conv.mode}">${conv.mode}</span> · Language: ${conv.language ?? "?"} · Memories:
             ${memories.map((m) => `${m.key}=${m.value}`).join("; ") || "none"}

@@ -109,6 +109,9 @@ export class PublicStorefrontShopify implements ShopifyService {
   async findOrdersByPhone(): Promise<null> {
     return null; // eval customers use fictional numbers
   }
+  async findOrdersByEmail(): Promise<null> {
+    return null;
+  }
 
   async getPolicies() {
     if (this.policies) return this.policies;

@@ -90,6 +90,13 @@ export function businessLayer(opts: { personaNotes: string; storeRules?: string;
     .join("\n\n");
 }
 
+/** Overrides the WhatsApp-specific format rules when the conversation is by email. */
+export const EMAIL_CHANNEL_RULES = `CHANNEL: EMAIL. This customer wrote to BABITO's support mailbox; your reply is sent as an email in the same thread. Everything in your instructions applies, except:
+- Write a complete plain-text email body (no subject line, no markdown, no emoji): a short greeting (with their first name if the sender name looks like a real first name), the answer, then the sign-off on its own line ("צוות BABITO" / "فريق BABITO" / "BABITO team") in EVERY email.
+- Up to ~10 short lines; a short list is fine. Still one question at a time.
+- Their verified identity is their email address (not a WhatsApp number): get_my_orders searches by it, and an order is verified when this address is on it. Only ask for the order email if the order was placed with a different address.
+- Lines starting with "[Subject: ...]" are the email subject.`;
+
 export function dynamicContext(opts: {
   now: string;
   staffAvailableNow: boolean;
@@ -99,9 +106,11 @@ export function dynamicContext(opts: {
   replyLanguage: Lang | null;
 }): string {
   const c = opts.conversation.context;
+  const email = opts.customer.wa_id.startsWith("email:") ? opts.customer.wa_id.slice(6) : null;
   const lines = [
     `NOW: ${opts.now} Israel time. Staff available now: ${opts.staffAvailableNow ? "yes" : "no (they will reply during staff hours)"}.`,
-    `CUSTOMER: WhatsApp name "${opts.customer.display_name ?? "unknown"}".` +
+    ...(email ? [EMAIL_CHANNEL_RULES] : []),
+    (email ? `CUSTOMER: emails from ${email}, name "${opts.customer.display_name ?? "unknown"}".` : `CUSTOMER: WhatsApp name "${opts.customer.display_name ?? "unknown"}".`) +
       (opts.memories.length ? ` Known facts: ${opts.memories.map((m) => `${m.key}=${m.value}`).join("; ")}.` : ""),
     `REPLY LANGUAGE: ${opts.replyLanguage === "ar" ? "Arabic" : opts.replyLanguage === "he" ? "Hebrew" : opts.replyLanguage === "en" ? "English" : "same as the customer"}.`,
   ];

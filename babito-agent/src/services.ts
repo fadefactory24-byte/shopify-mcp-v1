@@ -4,7 +4,9 @@ import type { LLMProvider } from "./agent/llm.js";
 import { publicBaseUrl, type Config } from "./config.js";
 import type { Db } from "./db/client.js";
 import type { Logger } from "./logger.js";
-import { ResendEmail, StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
+import { ChannelSender, EmailChannel } from "./email/channel.js";
+import { dbTokenStore, GraphMailClient, type MailApi } from "./email/graph.js";
+import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
@@ -20,6 +22,8 @@ export interface Services {
   knowledge: KnowledgeService;
   notifier: HandoffNotifier;
   processor: MessageProcessor;
+  /** Present when the email channel is enabled. */
+  email: EmailChannel | null;
 }
 
 /** Wire real implementations; tests pass fakes via `overrides`. */
@@ -27,7 +31,7 @@ export function buildServices(
   cfg: Config,
   db: Db,
   log: Logger,
-  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier">> & { tracking?: TrackingService } = {},
+  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier">> & { tracking?: TrackingService; mail?: MailApi } = {},
 ): Services {
   const tracking = overrides.tracking ?? (cfg.SEVENTEENTRACK_API_KEY ? new SeventeenTrack({ apiKey: cfg.SEVENTEENTRACK_API_KEY }) : undefined);
   const whatsapp =
@@ -45,6 +49,29 @@ export function buildServices(
       }),
       { storePublicUrl: cfg.STORE_PUBLIC_URL },
     );
+  // Support mailbox (Microsoft Graph): the email channel and/or the staff alert emails.
+  const mail: MailApi | null =
+    overrides.mail ??
+    (cfg.MS_CLIENT_ID
+      ? new GraphMailClient({ clientId: cfg.MS_CLIENT_ID, tenant: cfg.MS_TENANT_ID, seedRefreshToken: cfg.MS_REFRESH_TOKEN, store: dbTokenStore(db) })
+      : null);
+  // The email channel and the processor need each other: bind the processor late.
+  let processorRef: MessageProcessor | null = null;
+  const email =
+    mail && cfg.EMAIL_CHANNEL_ENABLED && cfg.EMAIL_MAILBOX
+      ? new EmailChannel({
+          db,
+          mail,
+          mailbox: cfg.EMAIL_MAILBOX,
+          log,
+          schedule: (id) => processorRef?.schedule(id),
+          applyStaffReplies: async (echoes) => {
+            await processorRef?.applyEchoes(echoes);
+          },
+        })
+      : null;
+  const sender = new ChannelSender(whatsapp, email);
+  const alertTo = cfg.STAFF_NOTIFY_EMAIL.split(",").map((s) => s.trim()).filter(Boolean);
   const llm = overrides.llm ?? new AnthropicProvider({ apiKey: cfg.ANTHROPIC_API_KEY, refusalFallback: cfg.AI_REFUSAL_FALLBACK });
   const knowledge = new KnowledgeService(db, shopify);
   const notifier =
@@ -54,10 +81,8 @@ export function buildServices(
       staffNumbers: cfg.STAFF_WHATSAPP_NUMBERS.split(",").map((s) => s.trim()).filter(Boolean),
       whatsapp,
       adminBaseUrl: publicBaseUrl(cfg),
-      email:
-        cfg.RESEND_API_KEY && cfg.STAFF_NOTIFY_EMAIL
-          ? new ResendEmail({ apiKey: cfg.RESEND_API_KEY, from: cfg.STAFF_NOTIFY_EMAIL_FROM, to: cfg.STAFF_NOTIFY_EMAIL.split(",").map((s) => s.trim()).filter(Boolean) })
-          : null,
+      email: mail && alertTo.length ? { send: (subject, text) => mail.sendMail(alertTo, subject, text) } : null,
+      flagEmail: email ? (handle) => email.flagLatest(handle) : undefined,
       log,
     });
   const processor = new MessageProcessor(
@@ -69,7 +94,7 @@ export function buildServices(
       notifier,
       tracking,
       log,
-      whatsapp,
+      whatsapp: sender,
       config: { model: cfg.AI_MODEL_MAIN, effort: cfg.AI_MODEL_MAIN_EFFORT, maxIterations: cfg.AI_MAX_TOOL_ITERATIONS, historyMessages: cfg.AI_HISTORY_MESSAGES },
     },
     {
@@ -83,5 +108,6 @@ export function buildServices(
       fastModel: cfg.AI_MODEL_FAST,
     },
   );
-  return { db, log, llm, shopify, whatsapp, knowledge, notifier, processor };
+  processorRef = processor;
+  return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, email };
 }

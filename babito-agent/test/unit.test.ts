@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ResendEmail, StaffNotifier } from "../src/pipeline/handoff.js";
+import { StaffNotifier } from "../src/pipeline/handoff.js";
+import { GraphMailClient } from "../src/email/graph.js";
+import { skipReason } from "../src/email/channel.js";
 import { extractPrices, isExplicitHumanRequest, ungroundedPrices } from "../src/agent/guardrails.js";
 import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
@@ -242,15 +244,51 @@ describe("staff email alerts", () => {
     await n.systemAlert("WhatsApp send failed", "boom again");
     expect(sent.filter((s) => s.subject.includes("System alert"))).toHaveLength(1);
   });
+});
 
-  it("ResendEmail posts to Resend with the idempotency key and throws on errors", async () => {
-    const calls: { url: string; init: RequestInit }[] = [];
-    const ok = new ResendEmail({ apiKey: "re_test", from: "BABITO Bot <onboarding@resend.dev>", to: ["support@mybabito.com"], fetchImpl: (async (url: string, init: RequestInit) => { calls.push({ url, init }); return new Response("{}", { status: 200 }); }) as any });
-    await ok.send("S", "T", "k1");
-    expect(calls[0]!.url).toBe("https://api.resend.com/emails");
-    expect((calls[0]!.init.headers as any)["Idempotency-Key"]).toBe("k1");
-    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ from: "BABITO Bot <onboarding@resend.dev>", to: ["support@mybabito.com"], subject: "S", text: "T" });
-    const bad = new ResendEmail({ apiKey: "x", from: "a", to: ["b"], fetchImpl: (async () => new Response("nope", { status: 403 })) as any });
-    await expect(bad.send("S", "T")).rejects.toThrow("email HTTP 403");
+describe("email channel units", () => {
+  it("handoff on an email conversation flags the customer's email in Outlook", async () => {
+    const flagged: string[] = [];
+    const n = new StaffNotifier({ webhookUrl: "", staffNumbers: [], whatsapp: { sendText: async () => ({ waMessageId: "x" }) } as any, email: null, flagEmail: async (h) => void flagged.push(h), log: { warn() {}, info() {}, error() {} } as any });
+    await n.notify({ handoffId: "h", conversationId: "c", customerWaId: "email:dana@example.com", customerName: "Dana", reason: "complaint", priority: "normal", summary: "x" });
+    expect(flagged).toEqual(["email:dana@example.com"]);
+  });
+
+  it("skipReason: customers pass, automated mail is skipped", () => {
+    const base = { id: "1", conversationId: null, subject: "שאלה", fromAddress: "dana@example.com", fromName: null, receivedAt: "", text: "hi", hasAttachments: false, headers: {} };
+    expect(skipReason(base, "support@mybabito.com")).toBeNull();
+    expect(skipReason({ ...base, fromAddress: "support@mybabito.com" }, "support@mybabito.com")).toBe("own_mailbox");
+    expect(skipReason({ ...base, fromAddress: "mailer-daemon@x.com" }, "s@x")).toBe("automated_sender");
+    expect(skipReason({ ...base, fromAddress: "a@mail.facebookmail.com" }, "s@x")).toBe("platform_sender");
+    expect(skipReason({ ...base, headers: { precedence: "bulk" } }, "s@x")).toBe("bulk");
+    expect(skipReason({ ...base, subject: "Out of Office: hi" }, "s@x")).toBe("auto_reply_subject");
+  });
+
+  it("GraphMailClient: refreshes once, persists the rotated token, replies via createReply + send with immutable ids", async () => {
+    const saved: string[] = [];
+    const calls: { url: string; method: string; prefer: string | null; body?: string }[] = [];
+    const client = new GraphMailClient({
+      clientId: "cid",
+      tenant: "organizations",
+      seedRefreshToken: "seed-rt",
+      store: { load: async () => saved.at(-1) ?? null, save: async (t) => void saved.push(t) },
+      fetchImpl: (async (url: string, init: RequestInit) => {
+        const headers = new Headers(init.headers);
+        calls.push({ url, method: init.method ?? "GET", prefer: headers.get("prefer"), body: typeof init.body === "string" ? init.body : String(init.body ?? "") });
+        if (url.includes("/oauth2/v2.0/token")) return new Response(JSON.stringify({ access_token: "at", refresh_token: "rt-2", expires_in: 3600 }), { status: 200 });
+        if (url.endsWith("/createReply")) return new Response(JSON.stringify({ id: "draft-1" }), { status: 201 });
+        return new Response(null, { status: 202 });
+      }) as any,
+    });
+    expect(await client.reply("msg-1", "hello")).toBe("draft-1");
+    await client.sendMail(["support@mybabito.com"], "S", "T");
+    expect(calls.filter((c) => c.url.includes("/token"))).toHaveLength(1);
+    expect(calls[0]!.body).toContain("refresh_token=seed-rt");
+    expect(saved).toEqual(["rt-2"]);
+    expect(calls[1]!.url).toBe("https://graph.microsoft.com/v1.0/me/messages/msg-1/createReply");
+    expect(calls[1]!.prefer).toContain('IdType="ImmutableId"');
+    expect(JSON.parse(calls[1]!.body!)).toEqual({ message: { body: { contentType: "Text", content: "hello" } } });
+    expect(calls[2]!.url).toBe("https://graph.microsoft.com/v1.0/me/messages/draft-1/send");
+    expect(JSON.parse(calls[3]!.body!).saveToSentItems).toBe(false);
   });
 });

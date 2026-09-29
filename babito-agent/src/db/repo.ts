@@ -26,6 +26,7 @@ export interface ConversationContext {
 export interface Conversation {
   id: string;
   customer_id: string;
+  channel?: "whatsapp" | "email";
   status: "open" | "closed";
   mode: "ai" | "human" | "paused";
   language: Lang | null;

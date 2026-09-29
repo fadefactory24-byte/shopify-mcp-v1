@@ -2,7 +2,7 @@ import pino from "pino";
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
 import { buildServices } from "../../src/services.js";
-import { FakeNotifier, FakeShopify, FakeTracking, FakeWhatsApp, ScriptedLLM, sign } from "./fakes.js";
+import { FakeMail, FakeNotifier, FakeShopify, FakeTracking, FakeWhatsApp, ScriptedLLM, sign } from "./fakes.js";
 import { createTestDb } from "./pglite.js";
 
 export const APP_SECRET = "test-app-secret";
@@ -30,7 +30,8 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   const whatsapp = new FakeWhatsApp();
   const notifier = new FakeNotifier();
   const tracking = new FakeTracking();
-  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking });
+  const mail = new FakeMail();
+  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking, mail });
   /** Fake Graph API for the admin's Embedded Signup calls; tests replace it. */
   let metaFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "no fake set" } }), { status: 500 });
   const app = createApp({
@@ -38,7 +39,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     log,
     processor: services.processor,
     knowledge: services.knowledge,
-    media: whatsapp,
+    media: services.whatsapp,
     config: {
       verifyToken: cfg.WHATSAPP_VERIFY_TOKEN,
       appSecret: cfg.WHATSAPP_APP_SECRET,
@@ -77,7 +78,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     metaFetch = f;
   };
 
-  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, setMetaFetch, processor: services.processor };
+  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, setMetaFetch, mail, email: services.email, processor: services.processor };
 }
 
 export type Harness = Awaited<ReturnType<typeof createHarness>>;

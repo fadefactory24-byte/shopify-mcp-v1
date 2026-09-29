@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Db } from "../db/client.js";
+import { emailOf } from "../email/channel.js";
 import { repo, type Conversation, type ConversationContext, type Customer, type HandoffReason } from "../db/repo.js";
 import type { Logger } from "../logger.js";
 import { performHandoff, type HandoffNotifier } from "../pipeline/handoff.js";
@@ -147,9 +148,15 @@ export const TOOLS = [
       "List the customer's recent orders, found by their WhatsApp phone number (already verified by WhatsApp). Use when the customer asks about 'my order' without an order number.",
     schema: z.object({}),
     async run(_input, ctx) {
-      const found = await ctx.shopify.findOrdersByPhone(ctx.customer.wa_id);
+      const senderEmail = emailOf(ctx.customer.wa_id);
+      const found = senderEmail ? await ctx.shopify.findOrdersByEmail(senderEmail) : await ctx.shopify.findOrdersByPhone(ctx.customer.wa_id);
       if (!found || found.orders.length === 0) {
-        return { found: false, hint: "No orders linked to this WhatsApp number. Ask for the order number (and later the order email if needed)." };
+        return {
+          found: false,
+          hint: senderEmail
+            ? "No orders under this email address. Ask for the order number (and the email used on the order, if different)."
+            : "No orders linked to this WhatsApp number. Ask for the order number (and later the order email if needed).",
+        };
       }
       await repo.setCustomerShopifyId(ctx.db, ctx.customer.id, found.customerId);
       for (const o of found.orders) rememberVerifiedOrder(ctx, o.name);
@@ -177,7 +184,7 @@ export const TOOLS = [
         ctx.context.failed_verifications!.push({ at: new Date().toISOString() });
         return { found: false, hint: "No order with this number. Ask the customer to double-check it (it appears in the order confirmation email/SMS)." };
       }
-      const byPhone = orderBelongsToPhone(order, ctx.customer.wa_id);
+      const byPhone = ownsOrder(order, ctx.customer.wa_id);
       const byEmail = input.email ? orderBelongsToEmail(order, input.email) : false;
       if (!alreadyVerified && !byPhone && !byEmail) {
         ctx.context.failed_verifications!.push({ at: new Date().toISOString() });
@@ -210,7 +217,7 @@ export const TOOLS = [
       if (!order) return { submitted: false, reason: "order_not_found" };
       const verified =
         (ctx.context.verified_orders ?? []).includes(order.name) ||
-        orderBelongsToPhone(order, ctx.customer.wa_id) ||
+        ownsOrder(order, ctx.customer.wa_id) ||
         (input.email ? orderBelongsToEmail(order, input.email) : false);
       if (!verified) return { submitted: false, reason: "not_verified", hint: "Ask for the email used on the order and call again with it." };
       rememberVerifiedOrder(ctx, order.name);
@@ -344,4 +351,10 @@ export async function executeTool(name: string, rawInput: unknown, ctx: ToolCont
       latencyMs: Date.now() - started,
     };
   }
+}
+
+/** The customer's own channel identity matches the order: WhatsApp number, or the sender address for email. */
+function ownsOrder(order: OrderDetail, handle: string): boolean {
+  const email = emailOf(handle);
+  return email ? orderBelongsToEmail(order, email) : orderBelongsToPhone(order, handle);
 }

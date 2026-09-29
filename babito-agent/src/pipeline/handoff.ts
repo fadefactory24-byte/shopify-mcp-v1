@@ -3,6 +3,7 @@ import { repo, type HandoffReason } from "../db/repo.js";
 import type { Logger } from "../logger.js";
 import type { WhatsAppSender } from "../whatsapp/client.js";
 import { truncate } from "../util/text.js";
+import { displayHandle, isEmailHandle } from "../email/channel.js";
 
 export interface HandoffNotice {
   handoffId: string;
@@ -31,23 +32,9 @@ export interface HandoffNotifier {
   systemAlert?(kind: string, message: string): Promise<void>;
 }
 
-/** Sends plain-text email through Resend's HTTP API (https://resend.com). */
-export class ResendEmail {
-  constructor(private readonly opts: { apiKey: string; from: string; to: string[]; fetchImpl?: typeof fetch }) {}
-
-  async send(subject: string, text: string, idempotencyKey?: string) {
-    const res = await (this.opts.fetchImpl ?? fetch)("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.opts.apiKey}`,
-        "Content-Type": "application/json",
-        ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
-      },
-      body: JSON.stringify({ from: this.opts.from, to: this.opts.to, subject, text }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) throw new Error(`email HTTP ${res.status}: ${(await res.text().catch(() => "")).slice(0, 200)}`);
-  }
+/** Where staff alert emails go out (the support mailbox via Microsoft Graph). */
+export interface AlertEmail {
+  send(subject: string, text: string, idempotencyKey?: string): Promise<void>;
 }
 
 const WAITING_EVERY_MS = 30 * 60_000;
@@ -69,7 +56,9 @@ export class StaffNotifier implements HandoffNotifier {
       staffNumbers: string[];
       whatsapp: WhatsAppSender;
       adminBaseUrl?: string;
-      email?: ResendEmail | null;
+      email?: AlertEmail | null;
+      /** Handoff on an email conversation: flag the customer's email in the mailbox. */
+      flagEmail?: (handle: string) => Promise<void>;
       log: Logger;
       now?: () => number;
     },
@@ -93,7 +82,7 @@ export class StaffNotifier implements HandoffNotifier {
     const last = this.lastWaiting.get(n.conversationId);
     if (last !== undefined && now - last < WAITING_EVERY_MS) return;
     this.lastWaiting.set(n.conversationId, now);
-    const who = `${n.customerName ?? ""} +${n.customerWaId}`.trim();
+    const who = `${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`.trim();
     await this.sendEmail(
       `[BABITO] Customer waiting for staff: ${who}`,
       `The chat is with staff (the bot is not answering) and the customer wrote again:\n\n${truncate(n.text ?? "(media or empty message)", 500)}${this.link(n.conversationId)}`,
@@ -112,13 +101,13 @@ export class StaffNotifier implements HandoffNotifier {
     const text =
       `🔔 BABITO handoff (${n.priority})\n` +
       `Reason: ${n.reason}${n.orderName ? ` | Order ${n.orderName}` : ""}${n.changeType ? ` | ${n.changeType}` : ""}\n` +
-      `Customer: ${n.customerName ?? ""} +${n.customerWaId}\n` +
+      `Customer: ${n.customerName ?? ""} ${displayHandle(n.customerWaId)}${isEmailHandle(n.customerWaId) ? " (email)" : " (WhatsApp)"}\n` +
       `${truncate(n.summary ?? "", 500)}` +
       (this.opts.adminBaseUrl ? `\n${this.opts.adminBaseUrl}/admin/conversations/${n.conversationId}` : "");
 
     const tasks: Promise<unknown>[] = [];
     if (this.opts.email) {
-      const subject = `[BABITO] ${n.priority === "high" ? "URGENT " : ""}Handoff: ${n.reason}${n.orderName ? ` (order ${n.orderName})` : ""}: ${n.customerName ?? ""} +${n.customerWaId}`;
+      const subject = `[BABITO] ${n.priority === "high" ? "URGENT " : ""}Handoff: ${n.reason}${n.orderName ? ` (order ${n.orderName})` : ""}: ${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`.replace(/\s+/g, " ");
       tasks.push(this.opts.email.send(subject, text, `handoff-${n.handoffId}`));
     }
     if (this.opts.webhookUrl) {
@@ -133,6 +122,7 @@ export class StaffNotifier implements HandoffNotifier {
         }),
       );
     }
+    if (this.opts.flagEmail && isEmailHandle(n.customerWaId)) tasks.push(this.opts.flagEmail(n.customerWaId));
     for (const num of this.opts.staffNumbers) tasks.push(this.opts.whatsapp.sendText(num, text));
     const results = await Promise.allSettled(tasks);
     for (const r of results) if (r.status === "rejected") this.opts.log.warn({ err: String(r.reason), handoffId: n.handoffId }, "staff notification failed");

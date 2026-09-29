@@ -1,6 +1,6 @@
 import { normalizePhone, phonesMatch } from "../util/phone.js";
 import type { ShopifyGraphQLClient } from "./client.js";
-import { CATALOG_QUERY, CUSTOMER_BY_PHONE_QUERY, ORDER_BY_NAME_QUERY, POLICIES_QUERY, PRODUCT_QUERY } from "./queries.js";
+import { CATALOG_QUERY, CUSTOMER_BY_EMAIL_QUERY, CUSTOMER_BY_PHONE_QUERY, ORDER_BY_NAME_QUERY, POLICIES_QUERY, PRODUCT_QUERY } from "./queries.js";
 
 // ----------------------------------------------------------------------------- types
 
@@ -63,6 +63,7 @@ export interface ShopifyService {
   getProduct(id: string): Promise<ProductDetail | null>;
   findOrderByName(orderNumber: string): Promise<OrderDetail | null>;
   findOrdersByPhone(phoneDigits: string): Promise<{ customerId: string; firstName: string | null; orders: OrderDetail[] } | null>;
+  findOrdersByEmail(email: string): Promise<{ customerId: string; firstName: string | null; orders: OrderDetail[] } | null>;
   getPolicies(): Promise<{ type: string; title: string; body: string; url: string }[]>;
 }
 
@@ -291,6 +292,20 @@ export class LiveShopifyService implements ShopifyService {
     const data: any = await this.client.query(CUSTOMER_BY_PHONE_QUERY, { q: `phone:+${digits}` });
     // Shopify phone search is fuzzy; confirm the match ourselves.
     const customer = (data.customers.nodes as any[]).find((c) => phonesMatch(c.defaultPhoneNumber?.phoneNumber, digits));
+    if (!customer) return null;
+    return {
+      customerId: customer.id as string,
+      firstName: (customer.firstName as string | null) ?? null,
+      orders: (customer.orders.nodes as RawOrder[]).map(mapOrder),
+    };
+  }
+
+  async findOrdersByEmail(email: string) {
+    const e = email.trim().toLowerCase();
+    if (!/^[^\s@"]+@[^\s@"]+\.[^\s@"]+$/.test(e)) return null;
+    const data: any = await this.client.query(CUSTOMER_BY_EMAIL_QUERY, { q: `email:"${e}"` });
+    // Shopify search is fuzzy; require the exact address.
+    const customer = (data.customers.nodes as any[]).find((c) => String(c.defaultEmailAddress?.emailAddress ?? "").toLowerCase() === e);
     if (!customer) return null;
     return {
       customerId: customer.id as string,
