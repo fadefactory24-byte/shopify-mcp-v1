@@ -66,6 +66,8 @@ Three more switches, or messages never arrive (no error anywhere, the webhook ju
 
 Staff keep answering from the phone app; the bot answers too and goes quiet in any chat where staff reply from the app (their messages arrive as `smb_message_echoes` and switch the chat to human mode).
 
+If the number also carries non-customer chats (suppliers, personal contacts), add those numbers at `/admin/blocked` **before** connecting — the AI never replies to a number on that list (their messages still arrive and show up in `/admin` for staff to answer normally). A number can also be added from its conversation page after the fact ("Ignore this contact").
+
 1. Meta app → Facebook Login for Business → Configurations → **Create from template** → "WhatsApp Embedded Signup configuration with 60-day token". Copy its configuration id.
 2. Facebook Login for Business → Settings: *Login with the JavaScript SDK* = Yes, *Allowed domains for the JavaScript SDK* = `https://<your-domain>/`. App settings → Basic → *App domains* = `<your-domain>`.
 3. Webhooks (Whatsapp Business Account): also subscribe `smb_message_echoes` and `account_update`.

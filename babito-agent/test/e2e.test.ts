@@ -859,3 +859,55 @@ describe("email channel (support mailbox)", () => {
     expect((await h.q("select mode from conversations"))[0].mode).toBe("human");
   });
 });
+
+describe("ignored contacts (suppliers etc.)", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+
+  it("a number blocked before it ever messages gets no AI reply, but the message is still stored", async () => {
+    const res = await h.app.request("http://localhost/admin/blocked/add", {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/x-www-form-urlencoded" },
+      body: `contact=${encodeURIComponent(CUSTOMER_PHONE)}&name=${encodeURIComponent("Supplier X")}`,
+    });
+    expect(res.status).toBe(302);
+    expect((await h.q(`select is_blocked from customers where wa_id = $1`, [CUSTOMER_PHONE]))[0].is_blocked).toBe(true);
+
+    const beforeMessage = await (await h.app.request("http://localhost/admin/blocked", { headers: auth })).text();
+    expect(beforeMessage).toContain("Supplier X");
+    expect(beforeMessage).toContain(CUSTOMER_PHONE);
+
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "מתי המשלוח הבא שלכם?"));
+    expect(h.whatsapp.sent).toHaveLength(0);
+    expect(h.llm.requests).toHaveLength(0);
+    expect(await h.q(`select status from messages where direction = 'inbound'`)).toEqual([{ status: "skipped" }]);
+    // A real incoming WhatsApp profile name legitimately updates the label (same as any customer).
+    expect((await h.q(`select is_blocked from customers where wa_id = $1`, [CUSTOMER_PHONE]))[0].is_blocked).toBe(true);
+  });
+
+  it("blocking an existing customer from their conversation page stops the AI; unblocking resumes it", async () => {
+    h.llm.push(say("שלום!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(h.whatsapp.sent).toHaveLength(1);
+    const [conv] = await h.q("select id, customer_id from conversations");
+
+    const blockRes = await h.app.request(`http://localhost/admin/customers/${conv.customer_id}/block`, { method: "POST", headers: auth });
+    expect(blockRes.status).toBe(302);
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "אתה שם?", { id: "wamid.ignored" }));
+    expect(h.whatsapp.sent).toHaveLength(1); // no new reply
+
+    await h.app.request(`http://localhost/admin/customers/${conv.customer_id}/unblock`, { method: "POST", headers: auth });
+    h.llm.push(say("כן, כאן!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "עכשיו?", { id: "wamid.back" }));
+    expect(h.whatsapp.sent).toHaveLength(2);
+  });
+
+  it("rejects an invalid contact and requires same-origin POST", async () => {
+    expect((await h.app.request("http://localhost/admin/blocked", { headers: auth })).status).toBe(200);
+    expect((await h.app.request("http://localhost/admin/blocked")).status).toBe(401);
+    const bad = await h.app.request("http://localhost/admin/blocked/add", { method: "POST", headers: { ...auth, "content-type": "application/x-www-form-urlencoded" }, body: "contact=not-a-number-or-email" });
+    expect(bad.status).toBe(302);
+    expect(await h.q(`select count(*)::int n from customers`)).toEqual([{ n: 0 }]);
+    const csrf = await h.app.request("http://localhost/admin/blocked/add", { method: "POST", headers: { ...auth, Origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" }, body: `contact=${CUSTOMER_PHONE}` });
+    expect(csrf.status).toBe(403);
+  });
+});

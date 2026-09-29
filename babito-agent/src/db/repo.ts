@@ -109,6 +109,33 @@ export const repo = {
     await db.query(`update customers set preferred_language = $2 where id = $1 and preferred_language is distinct from $2`, [id, lang]);
   },
 
+  /**
+   * Block a contact (WhatsApp id or 'email:' handle) so the AI never replies to them, even before
+   * they've ever messaged (e.g. a known supplier number the owner is pre-adding). Their messages
+   * still arrive and are stored — visible in /admin, and staff can reply normally — the AI just
+   * never processes them (see MessageProcessor.handleBatch's is_blocked check).
+   */
+  async blockContact(db: Db, waId: string, displayName: string | null): Promise<Customer> {
+    const { rows } = await db.query<Customer>(
+      `insert into customers (wa_id, display_name, is_blocked) values ($1, $2, true)
+       on conflict (wa_id) do update set is_blocked = true, display_name = coalesce(customers.display_name, excluded.display_name)
+       returning id, wa_id, display_name, preferred_language, shopify_customer_id, is_blocked`,
+      [waId, displayName],
+    );
+    return rows[0]!;
+  },
+
+  async unblockContact(db: Db, id: string) {
+    await db.query(`update customers set is_blocked = false where id = $1`, [id]);
+  },
+
+  async listBlockedContacts(db: Db): Promise<Customer[]> {
+    const { rows } = await db.query<Customer>(
+      `select id, wa_id, display_name, preferred_language, shopify_customer_id, is_blocked from customers where is_blocked = true order by wa_id`,
+    );
+    return rows;
+  },
+
   // -------------------------------------------------------------- conversations
   async getOrCreateOpenConversation(db: Db, customerId: string): Promise<Conversation> {
     const existing = await db.query<Conversation>(`select * from conversations where customer_id = $1 and status = 'open'`, [customerId]);

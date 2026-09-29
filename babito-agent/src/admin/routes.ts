@@ -3,7 +3,8 @@ import { basicAuth } from "hono/basic-auth";
 import { html } from "hono/html";
 import type { AppDeps } from "../app.js";
 import { repo } from "../db/repo.js";
-import { displayHandle } from "../email/channel.js";
+import { displayHandle, emailHandle } from "../email/channel.js";
+import { normalizePhone } from "../util/phone.js";
 import { ConnectError, completeWhatsAppOnboarding, connectPageBody, inspectGrant, parseCode, parseConnectInput } from "./whatsapp-connect.js";
 
 /**
@@ -102,7 +103,7 @@ export function adminRoutes(deps: AppDeps) {
       page(
         "Dashboard",
         html`<h1>BABITO WhatsApp Agent</h1>
-          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a></p>
+          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a> · <a href="/admin/blocked">Ignored contacts (suppliers etc.)</a></p>
           <div class="stats">
             ${stat("Inbound msgs (24h)", stats.inbound_24h!)} ${stat("AI runs (24h)", stats.runs_24h!)}
             ${stat("Failed runs (24h)", stats.failed_24h!, Number(stats.failed_24h) ? "bad" : "")}
@@ -170,7 +171,11 @@ export function adminRoutes(deps: AppDeps) {
             <form class="inline" method="post" action="/admin/conversations/${id}/release"><button>Release to AI</button></form>
             <form class="inline" method="post" action="/admin/conversations/${id}/close"><button>Close conversation</button></form>
             <form class="inline" method="post" action="/admin/customers/${customer.id}/forget" onsubmit="return confirm('Delete memories and message texts for this customer?')"><button>Forget customer</button></form>
+            ${customer.is_blocked
+              ? html`<form class="inline" method="post" action="/admin/customers/${customer.id}/unblock"><button>Stop ignoring (let AI reply again)</button></form>`
+              : html`<form class="inline" method="post" action="/admin/customers/${customer.id}/block" onsubmit="return confirm('The AI will never reply to this contact again (e.g. a supplier). Their messages still arrive here for you to answer manually.')"><button>Ignore this contact (supplier etc.)</button></form>`}
           </p>
+          ${customer.is_blocked ? html`<p class="bad">This contact is on the ignore list: the AI never replies to them, only staff.</p>` : ""}
           ${conv.summary ? html`<p class="muted">Summary: ${conv.summary}</p>` : ""}
           ${handoffs.length ? html`<p>Handoffs: ${handoffs.map((h) => html`<span class="pill">${h.status}: ${h.reason}</span> `)}</p>` : ""}
           <h2>Messages</h2>
@@ -262,6 +267,76 @@ export function adminRoutes(deps: AppDeps) {
     await repo.resolveActiveHandoffs(db, id, "admin");
     await repo.audit(db, "admin", "close", "conversation", id);
     return c.redirect(`/admin`);
+  });
+
+  /**
+   * Contacts the AI never replies to (suppliers, personal contacts sharing the business number,
+   * etc.). Their messages still arrive and are stored for staff to see and answer manually.
+   */
+  r.get("/blocked", async (c) => {
+    const blocked = await repo.listBlockedContacts(db);
+    return c.html(
+      page(
+        "Ignored contacts",
+        html`<h1>Ignored contacts</h1>
+          <p class="muted">
+            The AI never replies to a number or email on this list (e.g. suppliers on the same WhatsApp number as customers). Their
+            messages still arrive and show up in conversations for staff to answer directly.
+          </p>
+          <form method="post" action="/admin/blocked/add">
+            <p>
+              <input type="text" name="contact" required maxlength="120" placeholder="WhatsApp number (e.g. 050-123-4567) or email address" style="width:60%" />
+              <input type="text" name="name" maxlength="120" placeholder="Label (optional, e.g. supplier name)" />
+              <button>Add to ignore list</button>
+            </p>
+          </form>
+          <table>
+            <tr>
+              <th>Contact</th>
+              <th>Label</th>
+              <th></th>
+            </tr>
+            ${blocked.map(
+              (b) => html`<tr>
+                <td>${displayHandle(b.wa_id)}</td>
+                <td>${b.display_name ?? ""}</td>
+                <td>
+                  <form class="inline" method="post" action="/admin/customers/${b.id}/unblock"><button>Stop ignoring</button></form>
+                </td>
+              </tr>`,
+            )}
+            ${blocked.length === 0 ? html`<tr><td colspan="3" class="muted">Nothing on the ignore list yet.</td></tr>` : ""}
+          </table>`,
+      ),
+    );
+  });
+
+  r.post("/blocked/add", async (c) => {
+    const form = await c.req.parseBody();
+    const raw = String(form.contact ?? "").trim();
+    const name = String(form.name ?? "").trim().slice(0, 120) || null;
+    const handle = raw.includes("@") ? (raw.match(/^[^\s@]+@[^\s@]+\.[^\s@]+$/) ? emailHandle(raw) : null) : normalizePhone(raw);
+    if (!handle) return c.redirect("/admin/blocked");
+    const contact = await repo.blockContact(db, handle, name);
+    await repo.audit(db, "admin", "block_contact", "customer", contact.id);
+    return c.redirect("/admin/blocked");
+  });
+
+  r.post("/customers/:id/block", async (c) => {
+    const id = c.req.param("id");
+    const customer = await repo.getCustomer(db, id);
+    if (customer) {
+      await repo.blockContact(db, customer.wa_id, customer.display_name);
+      await repo.audit(db, "admin", "block_contact", "customer", id);
+    }
+    return c.redirect(c.req.header("referer") || "/admin/blocked");
+  });
+
+  r.post("/customers/:id/unblock", async (c) => {
+    const id = c.req.param("id");
+    await repo.unblockContact(db, id);
+    await repo.audit(db, "admin", "unblock_contact", "customer", id);
+    return c.redirect(c.req.header("referer") || "/admin/blocked");
   });
 
   /** Privacy request: delete memories and every stored text about the customer; keep row skeletons for stats. */
