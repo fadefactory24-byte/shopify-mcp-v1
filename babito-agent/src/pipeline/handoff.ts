@@ -41,11 +41,12 @@ const WAITING_EVERY_MS = 30 * 60_000;
 const ALERT_EVERY_MS = 60 * 60_000;
 
 /**
- * Notifies staff via a generic webhook (point it at n8n / Slack / Make) and/or
- * WhatsApp messages to staff numbers. Plain-text staff WhatsApp delivery only works if the
- * staff member messaged the business number in the last 24h (Meta rule); when an approved
- * message template is configured (handoffTemplate), that's used instead so delivery doesn't
- * depend on the 24h window — the reliable way to reach staff on WhatsApp.
+ * Notifies staff of a handoff via WhatsApp messages to staff numbers (the only channel for
+ * handoff alerts — no email leg) and/or a generic webhook (point it at n8n / Slack / Make).
+ * Plain-text staff WhatsApp delivery only works if the staff member messaged the business
+ * number in the last 24h (Meta rule); when an approved message template is configured
+ * (handoffTemplate), that's used instead so delivery doesn't depend on the 24h window.
+ * customerWaiting() and systemAlert() are separate, unaffected staff-email alerts.
  */
 export class StaffNotifier implements HandoffNotifier {
   private lastWaiting = new Map<string, number>();
@@ -109,10 +110,7 @@ export class StaffNotifier implements HandoffNotifier {
       (this.opts.adminBaseUrl ? `\n${this.opts.adminBaseUrl}/admin/conversations/${n.conversationId}` : "");
 
     const tasks: Promise<unknown>[] = [];
-    if (this.opts.email) {
-      const subject = `[BABITO] ${n.priority === "high" ? "URGENT " : ""}Handoff: ${n.reason}${n.orderName ? ` (order ${n.orderName})` : ""}: ${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`.replace(/\s+/g, " ");
-      tasks.push(this.opts.email.send(subject, text, `handoff-${n.handoffId}`));
-    }
+    // Handoff alerts go out over WhatsApp only (see StaffNotifier class doc) — no email leg here.
     if (this.opts.webhookUrl) {
       tasks.push(
         fetch(this.opts.webhookUrl, {

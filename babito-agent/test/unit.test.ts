@@ -267,14 +267,10 @@ describe("staff email alerts", () => {
     return { n, sent, tick: (ms: number) => (now += ms) };
   }
 
-  it("handoff email: urgent subject, admin link, idempotency key per handoff", async () => {
+  it("handoff sends no email (WhatsApp-only channel), even with email configured", async () => {
     const { n, sent } = setup();
     await n.notify({ handoffId: "h1", conversationId: "c1", customerWaId: "972501234567", customerName: "Dana", reason: "complaint", priority: "high", summary: "arrived broken", orderName: "#1374" });
-    expect(sent).toHaveLength(1);
-    expect(sent[0]!.subject).toBe("[BABITO] URGENT Handoff: complaint (order #1374): Dana +972501234567");
-    expect(sent[0]!.text).toContain("arrived broken");
-    expect(sent[0]!.text).toContain("https://bot.example/admin/conversations/c1");
-    expect(sent[0]!.key).toBe("handoff-h1");
+    expect(sent).toHaveLength(0);
   });
 
   it("customer-waiting and system alerts are throttled", async () => {

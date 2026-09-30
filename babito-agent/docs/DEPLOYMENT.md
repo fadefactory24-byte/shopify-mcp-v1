@@ -81,7 +81,7 @@ Send a message to the business number. You should see `message_received` → `ag
 
 ## 5b. Email channel (support mailbox, Microsoft 365)
 
-The agent reads new customer emails in the support mailbox and answers in the same thread, with the same rules as WhatsApp (the sender address is the verified identity for orders; handoffs flag the email for staff with the category "BABITO: needs staff"; a reply staff send themselves from Outlook puts the conversation in human mode). Automated mail (no-reply, platforms, mailing lists, auto-replies) and the mailbox's own messages are never answered, and only mail received after the channel starts is processed. Staff alert emails (handoffs, customer waiting, system problems) are sent from the same mailbox to `STAFF_NOTIFY_EMAIL`.
+The agent reads new customer emails in the support mailbox and answers in the same thread, with the same rules as WhatsApp (the sender address is the verified identity for orders; handoffs flag the email for staff with the category "BABITO: needs staff"; a reply staff send themselves from Outlook puts the conversation in human mode). Automated mail (no-reply, platforms, mailing lists, auto-replies) and the mailbox's own messages are never answered, and only mail received after the channel starts is processed. Staff alert emails (customer waiting, system problems) are sent from the same mailbox to `STAFF_NOTIFY_EMAIL`. Handoffs themselves are WhatsApp-only — see "5d. Staff WhatsApp alerts" below.
 
 1. entra.microsoft.com → App registrations → New registration: name "BABITO Agent Mail", single tenant. Authentication → *Allow public client flows* = Yes. API permissions → Microsoft Graph → Delegated: `Mail.ReadWrite`, `Mail.Send`, `User.Read`, `offline_access` (no admin-wide application permission: access is limited to the mailbox that signs in).
 2. `MS_CLIENT_ID=<Application (client) ID> MS_TENANT_ID=<Directory (tenant) ID> npx tsx scripts/connect-outlook.ts private/secrets.env`, sign in **as the support mailbox** at microsoft.com/devicelogin and accept.
@@ -104,7 +104,7 @@ Send a DM to the Page or the Instagram account. You should see `message_received
 
 ## 5d. Staff WhatsApp alerts (handoffs) with a message template
 
-`STAFF_NOTIFY_EMAIL` handoff alerts (customer needs a human, product problem, etc.) work out of the box. To also (or instead) get them as a WhatsApp message on a staff member's own phone reliably — not just when that number has texted the business number in the last 24h — use an approved WhatsApp message template:
+Handoffs (customer needs a human, product problem, etc.) alert staff over WhatsApp only — there is no handoff email. (`STAFF_NOTIFY_EMAIL` still covers the separate customer-waiting and system-problem alerts.) To reach a staff member's phone reliably — not just when that number has texted the business number in the last 24h — use an approved WhatsApp message template:
 
 1. Meta Business Suite → WhatsApp Manager → your WhatsApp Business Account → Message templates → Create template.
 2. Category **Utility**, type **Standard**. Body (3 variables, in this order — customer, reason, summary), e.g.:
@@ -120,7 +120,7 @@ Send a DM to the Page or the Instagram account. You should see `message_received
    (A variable can't be the very first or very last thing in the body — keep static text before `{{1}}` and after `{{3}}`.) Fill in an example value for each variable, then submit for review (usually approved within minutes to a few hours).
 3. Once approved, set `STAFF_HANDOFF_TEMPLATE` to the template's name (e.g. `babito_staff_handoff`) and `STAFF_HANDOFF_TEMPLATE_LANG` to its language code (`en` for plain "English"); add the staff phone number(s) to `STAFF_WHATSAPP_NUMBERS` (comma-separated, international format e.g. `972501234567`, no `+`). Deploy.
 
-While the template is pending or not configured, handoffs still email as before — `STAFF_HANDOFF_TEMPLATE` empty is a safe default.
+While the template is pending approval (or `STAFF_HANDOFF_TEMPLATE`/`STAFF_WHATSAPP_NUMBERS` aren't set), handoffs have no email fallback — they only reach staff via the admin dashboard (and the webhook, if `STAFF_NOTIFY_WEBHOOK_URL` is configured) until the template is live.
 
 ## 6. Scheduled jobs
 
