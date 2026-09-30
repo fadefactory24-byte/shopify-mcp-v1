@@ -89,6 +89,14 @@ const ConfigSchema = z.object({
   /** Public https URL of this server, for links in alerts. Defaults to Railway's public domain. */
   PUBLIC_BASE_URL: z.string().optional().default(""),
 
+  // Social channel: Facebook Page Messenger + Instagram DMs, same Meta app as WhatsApp.
+  SOCIAL_CHANNEL_ENABLED: bool(false),
+  META_PAGE_ID: z.string().optional().default(""),
+  META_INSTAGRAM_ID: z.string().optional().default(""),
+  META_PAGE_ACCESS_TOKEN: z.string().optional().default(""),
+  /** Never auto-reply to (or even store) a Messenger/Instagram message older than this. */
+  SOCIAL_MAX_AGE_DAYS: int(7),
+
   // Admin dashboard / API (HTTP Basic auth, user "admin")
   ADMIN_PASSWORD: z.string().optional().default(""),
   CRON_SECRET: z.string().optional().default(""),
@@ -127,6 +135,7 @@ export function redactedConfigSummary(cfg: Config) {
     staffWebhook: Boolean(cfg.STAFF_NOTIFY_WEBHOOK_URL),
     staffEmail: Boolean(cfg.MS_CLIENT_ID && cfg.STAFF_NOTIFY_EMAIL),
     emailChannel: cfg.EMAIL_CHANNEL_ENABLED && Boolean(cfg.MS_CLIENT_ID),
+    socialChannel: cfg.SOCIAL_CHANNEL_ENABLED && Boolean(cfg.META_PAGE_ACCESS_TOKEN),
     liveTracking: Boolean(cfg.SEVENTEENTRACK_API_KEY),
     adminEnabled: Boolean(cfg.ADMIN_PASSWORD),
   };

@@ -3,6 +3,7 @@ import { AnthropicProvider } from "../src/agent/anthropic.js";
 import { ShopifyError, ShopifyGraphQLClient } from "../src/shopify/client.js";
 import { LiveShopifyService } from "../src/shopify/service.js";
 import { SeventeenTrack } from "../src/tracking/tracking.js";
+import { SocialApiError, SocialSender } from "../src/social/client.js";
 import { isPermanentSendError, WhatsAppApiError, WhatsAppCloudClient } from "../src/whatsapp/client.js";
 
 type Call = { url: string; init: RequestInit };
@@ -148,6 +149,35 @@ describe("WhatsApp client", () => {
     expect(isPermanentSendError(err)).toBe(true); // the sweeper won't resend it either
     expect(calls).toHaveLength(1);
     expect(isPermanentSendError(new WhatsAppApiError("WhatsApp API 500: boom", 500))).toBe(false);
+  });
+});
+
+describe("Social (Messenger/Instagram) client", () => {
+  const opts = { pageAccessToken: "page-tok", pageId: "PAGE_ID", instagramId: "IG_ID", graphVersion: "v23.0" };
+
+  it("sends a Messenger reply to the page's own /me/messages endpoint", async () => {
+    const { f, calls } = mockFetch([json({ recipient_id: "PSID1", message_id: "m.1" })]);
+    const c = new SocialSender({ ...opts, fetchImpl: f });
+    await expect(c.sendText("psid:PSID1", "hi")).resolves.toEqual({ waMessageId: "m.1" });
+    expect(calls[0]!.url).toBe("https://graph.facebook.com/v23.0/me/messages");
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ recipient: { id: "PSID1" }, message: { text: "hi" } });
+    expect(new Headers(calls[0]!.init.headers as HeadersInit).get("authorization")).toBe("Bearer page-tok");
+  });
+
+  it("sends an Instagram reply to the IG account's own /messages endpoint", async () => {
+    const { f, calls } = mockFetch([json({ recipient_id: "IGSID1", message_id: "m.2" })]);
+    const c = new SocialSender({ ...opts, fetchImpl: f });
+    await expect(c.sendText("igsid:IGSID1", "hi")).resolves.toEqual({ waMessageId: "m.2" });
+    expect(calls[0]!.url).toBe("https://graph.facebook.com/v23.0/IG_ID/messages");
+  });
+
+  it("throws SocialApiError on a Graph API error, and rejects a non-social handle", async () => {
+    const { f } = mockFetch([json({ error: { message: "invalid token" } }, 401)]);
+    const c = new SocialSender({ ...opts, fetchImpl: f });
+    const err = await c.sendText("psid:PSID1", "hi").catch((e) => e);
+    expect(err).toBeInstanceOf(SocialApiError);
+    expect((err as SocialApiError).status).toBe(401);
+    await expect(c.sendText("972501234567", "hi")).rejects.toBeInstanceOf(SocialApiError);
   });
 });
 

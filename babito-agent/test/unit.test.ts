@@ -11,7 +11,8 @@ import { carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/track
 import { withRetry } from "../src/util/retry.js";
 import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
-import { CATALOG, CHOKING_ID, mediaWebhook, sign, statusWebhook, textWebhook } from "./helpers/fakes.js";
+import { MalformedSocialWebhookError, parseSocialWebhook, socialHandle } from "../src/social/webhook.js";
+import { CATALOG, CHOKING_ID, mediaWebhook, sign, socialWebhook, statusWebhook, textWebhook } from "./helpers/fakes.js";
 
 describe("language detection", () => {
   it("detects Arabic", () => expect(detectLanguage("عندكم جهاز منع الاختناق؟")).toBe("ar"));
@@ -94,6 +95,46 @@ describe("webhook parsing", () => {
     const parsed = parseWebhook(p, "PNID");
     expect(parsed.messages).toHaveLength(1);
     expect(parsed.skipped).toBe(1);
+  });
+});
+
+describe("social webhook parsing (Messenger/Instagram)", () => {
+  it("parses a Messenger text message into the shared InboundMessage shape", () => {
+    const p = parseSocialWebhook(socialWebhook("page", "PSID1", { text: "שלום", id: "mid.1" }));
+    expect(p.messages).toHaveLength(1);
+    expect(p.messages[0]).toMatchObject({ waMessageId: "mid.1", from: "psid:PSID1", text: "שלום", type: "text", profileName: null });
+  });
+  it("parses an Instagram image attachment, mapping type and carrying the direct url", () => {
+    const p = parseSocialWebhook(socialWebhook("instagram", "IGSID1", { attachment: { type: "image", url: "https://x/img.jpg" } }));
+    expect(p.messages[0]).toMatchObject({ from: "igsid:IGSID1", type: "image", media: { kind: "image", url: "https://x/img.jpg" } });
+  });
+  it("treats an echo as a staff reply, not an inbound customer message", () => {
+    const p = parseSocialWebhook(socialWebhook("page", "PSID1", { text: "handled", isEcho: true, id: "mid.echo" }));
+    expect(p.messages).toHaveLength(0);
+    expect(p.echoes).toEqual([{ waMessageId: "mid.echo", to: "psid:PSID1", text: "handled" }]);
+  });
+  it("never surfaces a message older than maxAgeMs, and counts it as skipped", () => {
+    const p = parseSocialWebhook(socialWebhook("page", "PSID1", { text: "old", ageMs: 8 * 24 * 3600_000 }));
+    expect(p.messages).toHaveLength(0);
+    expect(p.skipped).toBe(1);
+  });
+  it("skips a deleted message", () => {
+    const p = parseSocialWebhook(socialWebhook("page", "PSID1", { text: "oops", isDeleted: true }));
+    expect(p.messages).toHaveLength(0);
+    expect(p.skipped).toBe(1);
+  });
+  it("skips entries for a different page/IG account when expectedPageId/expectedIgId is set", () => {
+    const p = parseSocialWebhook(socialWebhook("page", "PSID1", { text: "hi", recipientId: "OTHER_PAGE" }), { expectedPageId: "PAGE_ID" });
+    expect(p.messages).toHaveLength(0);
+    expect(p.skipped).toBe(1);
+  });
+  it("throws MalformedSocialWebhookError on a payload that isn't a page/instagram messaging shape", () => {
+    expect(() => parseSocialWebhook({ hello: "world" })).toThrow(MalformedSocialWebhookError);
+    expect(() => parseSocialWebhook({ object: "whatsapp_business_account", entry: [] })).toThrow(MalformedSocialWebhookError);
+  });
+  it("socialHandle round-trips the platform prefix", () => {
+    expect(socialHandle("messenger", "1")).toBe("psid:1");
+    expect(socialHandle("instagram", "1")).toBe("igsid:1");
   });
 });
 

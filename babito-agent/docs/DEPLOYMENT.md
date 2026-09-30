@@ -87,6 +87,21 @@ The agent reads new customer emails in the support mailbox and answers in the sa
 2. `MS_CLIENT_ID=<Application (client) ID> MS_TENANT_ID=<Directory (tenant) ID> npx tsx scripts/connect-outlook.ts private/secrets.env`, sign in **as the support mailbox** at microsoft.com/devicelogin and accept.
 3. Set `MS_CLIENT_ID`, `MS_TENANT_ID`, `MS_REFRESH_TOKEN` (secret), `EMAIL_MAILBOX`, `STAFF_NOTIFY_EMAIL`, `EMAIL_CHANNEL_ENABLED=true`; apply the migrations; deploy. The log shows `emailChannel: true`.
 
+## 5c. Social channel (Facebook Messenger + Instagram DMs)
+
+Same webhook URL and same Meta app as WhatsApp; payloads are told apart by their `object` field (`page` vs `instagram` vs `whatsapp_business_account`), so no new webhook URL is needed in Meta. The agent answers Page Messenger and Instagram DMs with the same rules as WhatsApp, except it has no phone number or email for the customer (only their Messenger/Instagram profile), so order verification asks for the order number/email directly. A staff reply sent directly from the Page/Instagram inbox arrives as an echo and puts the conversation in human mode, same as the WhatsApp Business app. **Messages older than `SOCIAL_MAX_AGE_DAYS` (default 7) are never answered and never even stored** — this is deliberate, so connecting the channel does not suddenly reply to a backlog of old unanswered DMs.
+
+To ignore a supplier/personal contact on Messenger or Instagram, use "Ignore this contact" on their conversation page at `/admin` (the `/admin/blocked` add-by-number/email form is for WhatsApp/email only).
+
+1. Meta app (the same app as WhatsApp) → add the **Messenger** product (and **Instagram** if not already present) → link the Facebook Page and the Instagram professional account that's connected to it.
+2. Generate a Page Access Token for that Page with `pages_messaging` (and `instagram_manage_messages`, `instagram_basic` for Instagram) — Graph API Explorer or the Messenger product's own token generator. It does not expire like a user token as long as the app has the permissions approved (App Review, or Standard Access while in development mode with the Page added as a tester).
+3. Webhooks product → subscribe the **page** object to fields `messages`, `message_echoes`; subscribe the **instagram** object to field `messages`.
+4. Link the Page to the app: `POST https://graph.facebook.com/v23.0/<page-id>/subscribed_apps` with the Page Access Token (or the Messenger product's "connect a Page" button does this for you).
+5. Note the Page's id and the Instagram professional account's id (Page → Settings, or `GET /<page-id>?fields=instagram_business_account`).
+6. Set `SOCIAL_CHANNEL_ENABLED=true`, `META_PAGE_ID`, `META_INSTAGRAM_ID`, `META_PAGE_ACCESS_TOKEN` (secret); apply the migrations; deploy. The log shows `socialChannel: true`.
+
+Send a DM to the Page or the Instagram account. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin` (labeled "Messenger" or "Instagram").
+
 ## 6. Scheduled jobs
 
 None to set up. The server runs the sweeper every 15s and the retention purge every `MAINTENANCE_INTERVAL_HOURS` (default 24). If you prefer an external scheduler, set it to `0` and call:

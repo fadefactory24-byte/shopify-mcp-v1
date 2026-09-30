@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { repo } from "../src/db/repo.js";
 import { WhatsAppApiError } from "../src/whatsapp/client.js";
-import { callTool, CHOKING_ID, CUSTOMER_PHONE, lastToolResults, mediaWebhook, refuse, say, statusWebhook, textWebhook } from "./helpers/fakes.js";
+import { callTool, CHOKING_ID, CUSTOMER_PHONE, lastToolResults, mediaWebhook, refuse, say, socialWebhook, statusWebhook, textWebhook } from "./helpers/fakes.js";
 import { createHarness, type Harness } from "./helpers/harness.js";
 
 let h: Harness;
@@ -909,5 +909,91 @@ describe("ignored contacts (suppliers etc.)", () => {
     expect(await h.q(`select count(*)::int n from customers`)).toEqual([{ n: 0 }]);
     const csrf = await h.app.request("http://localhost/admin/blocked/add", { method: "POST", headers: { ...auth, Origin: "https://evil.example", "content-type": "application/x-www-form-urlencoded" }, body: `contact=${CUSTOMER_PHONE}` });
     expect(csrf.status).toBe(403);
+  });
+});
+
+describe("social channel (Facebook Messenger / Instagram DMs)", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+
+  it("a Messenger DM is answered through the same webhook, with social channel rules and no phone/email to verify orders", async () => {
+    h.llm.push((req) => {
+      const system = JSON.stringify(req);
+      expect(system).toContain("CHANNEL: FACEBOOK/INSTAGRAM DIRECT MESSAGE");
+      expect(system).toContain("Facebook Messenger name");
+      return say("היי! איך אפשר לעזור?")(req);
+    });
+    await h.customerSays(socialWebhook("page", "PSID123", { text: "שלום" }));
+    expect(h.social.sent).toEqual([{ to: "psid:PSID123", body: "היי! איך אפשר לעזור?", id: expect.any(String) }]);
+    expect(h.whatsapp.sent).toHaveLength(0);
+    const [conv] = await h.q("select channel, mode from conversations");
+    expect(conv).toEqual({ channel: "messenger", mode: "ai" });
+    const [cust] = await h.q("select wa_id from customers");
+    expect(cust).toEqual({ wa_id: "psid:PSID123" });
+  });
+
+  it("an Instagram DM is answered and tagged with the instagram channel", async () => {
+    h.llm.push(say("היי, מה תרצי לדעת?"));
+    await h.customerSays(socialWebhook("instagram", "IGSID999", { text: "מה המחיר?" }));
+    expect(h.social.sent).toHaveLength(1);
+    expect(h.social.sent[0]!.to).toBe("igsid:IGSID999");
+    expect((await h.q("select channel from conversations"))[0].channel).toBe("instagram");
+  });
+
+  it("never answers (or even stores) a message older than the 7-day staleness cutoff", async () => {
+    await h.customerSays(socialWebhook("page", "PSID_OLD", { text: "backlog message", ageMs: 8 * 24 * 3600_000 }));
+    expect(h.social.sent).toHaveLength(0);
+    expect(h.llm.requests).toHaveLength(0);
+    expect(await h.q("select count(*)::int n from messages")).toEqual([{ n: 0 }]);
+    expect(await h.q("select count(*)::int n from customers")).toEqual([{ n: 0 }]);
+
+    // A fresh message from the same person still gets answered normally.
+    h.llm.push(say("היי!"));
+    await h.customerSays(socialWebhook("page", "PSID_OLD", { text: "hello now", id: "mid.fresh" }));
+    expect(h.social.sent).toHaveLength(1);
+  });
+
+  it("an echo (staff replied directly from the Page/Instagram inbox) puts the conversation in human mode", async () => {
+    h.llm.push(say("תשובה ראשונה"));
+    await h.customerSays(socialWebhook("page", "PSID77", { text: "שאלה" }));
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("ai");
+
+    await h.customerSays(socialWebhook("page", "PSID77", { text: "טיפלתי בזה", isEcho: true, id: "mid.staff.1" }));
+    expect((await h.q("select mode from conversations"))[0].mode).toBe("human");
+    expect(h.llm.requests).toHaveLength(1); // no second AI run triggered by the echo itself
+  });
+
+  it("a malformed or unrelated page/instagram payload is acknowledged and ignored, not a 500", async () => {
+    const res = await h.customerSays({ object: "page", entry: [] });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok");
+
+    const notOurs = await h.customerSays(socialWebhook("page", "PSIDX", { text: "hi", recipientId: "SOME_OTHER_PAGE" }));
+    expect(notOurs.status).toBe(200);
+    expect(await h.q("select count(*)::int n from customers")).toEqual([{ n: 0 }]);
+
+    const garbage = await h.customerSays({ object: "page", entry: "not-an-array" });
+    expect(garbage.status).toBe(200);
+    expect(await garbage.text()).toBe("ignored");
+  });
+
+  it("an attachment carries a direct Meta-hosted URL, shown as-is in the dashboard (no on-demand download)", async () => {
+    await h.customerSays(socialWebhook("instagram", "IGSID55", { attachment: { type: "image", url: "https://scontent.xx.fbcdn.net/photo.jpg" } }));
+    await h.processor.drain();
+    const [conv] = await h.q("select id from conversations");
+    const authRes = await h.app.request(`http://localhost/admin/conversations/${conv.id}`, { headers: auth });
+    const bodyText = await authRes.text();
+    expect(bodyText).toContain("https://scontent.xx.fbcdn.net/photo.jpg");
+    expect(bodyText).not.toContain("/admin/media/");
+  });
+
+  it("blocking a Messenger contact from their conversation page stops the AI, same as any customer", async () => {
+    h.llm.push(say("שלום!"));
+    await h.customerSays(socialWebhook("page", "PSID_SUPPLIER", { text: "היי" }));
+    expect(h.social.sent).toHaveLength(1);
+    const [conv] = await h.q("select id, customer_id from conversations");
+
+    await h.app.request(`http://localhost/admin/customers/${conv.customer_id}/block`, { method: "POST", headers: auth });
+    await h.customerSays(socialWebhook("page", "PSID_SUPPLIER", { text: "עדיין שם?", id: "mid.ignored" }));
+    expect(h.social.sent).toHaveLength(1); // no new reply
   });
 });

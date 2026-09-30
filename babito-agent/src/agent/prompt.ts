@@ -10,7 +10,7 @@ import type { Lang } from "../util/text.js";
  * Store facts (policies, shipping, prices) are NEVER written here — the model
  * fetches them with tools.
  */
-export const PROMPT_VERSION = "2026-09-29.1";
+export const PROMPT_VERSION = "2026-09-30.1";
 
 export const CORE_RULES = `You are the WhatsApp customer-service and sales assistant of BABITO (mybabito.com), an Israeli online store for parents: baby & kids products (strollers, feeding, safety, toys, clothing, nursery) plus a few home/beauty gadgets. You talk to customers on WhatsApp.
 
@@ -99,6 +99,12 @@ export const EMAIL_CHANNEL_RULES = `CHANNEL: EMAIL. This customer wrote to BABIT
 - Their verified identity is their email address (not a WhatsApp number): get_my_orders searches by it, and an order is verified when this address is on it. Only ask for the order email if the order was placed with a different address.
 - Lines starting with "[Subject: ...]" are the email subject.`;
 
+/** Overrides when the conversation arrived through the Facebook Page or Instagram DMs. */
+export const SOCIAL_CHANNEL_RULES = `CHANNEL: FACEBOOK/INSTAGRAM DIRECT MESSAGE, not WhatsApp. Everything in your instructions applies, except:
+- You do not have this customer's phone number or email, only their Messenger/Instagram profile (their display name may be a nickname, not a real name: don't assume it's their first name unless it clearly is one).
+- get_my_orders has nothing to search by yet on this channel; go straight to asking for the order number, and if verification then needs it, the order email.
+- Everything else (tone, length, no long dash, sign-off rules, truth rules, handoff) is unchanged.`;
+
 export function dynamicContext(opts: {
   now: string;
   staffAvailableNow: boolean;
@@ -109,10 +115,15 @@ export function dynamicContext(opts: {
 }): string {
   const c = opts.conversation.context;
   const email = opts.customer.wa_id.startsWith("email:") ? opts.customer.wa_id.slice(6) : null;
+  const social = !email && (opts.customer.wa_id.startsWith("psid:") || opts.customer.wa_id.startsWith("igsid:")) ? (opts.customer.wa_id.startsWith("igsid:") ? "instagram" : "messenger") : null;
   const lines = [
     `NOW: ${opts.now} Israel time. Staff available now: ${opts.staffAvailableNow ? "yes" : "no (they will reply during staff hours)"}.`,
-    ...(email ? [EMAIL_CHANNEL_RULES] : []),
-    (email ? `CUSTOMER: emails from ${email}, name "${opts.customer.display_name ?? "unknown"}".` : `CUSTOMER: WhatsApp name "${opts.customer.display_name ?? "unknown"}".`) +
+    ...(email ? [EMAIL_CHANNEL_RULES] : social ? [SOCIAL_CHANNEL_RULES] : []),
+    (email
+      ? `CUSTOMER: emails from ${email}, name "${opts.customer.display_name ?? "unknown"}".`
+      : social
+        ? `CUSTOMER: ${social === "instagram" ? "Instagram" : "Facebook Messenger"} name "${opts.customer.display_name ?? "unknown"}".`
+        : `CUSTOMER: WhatsApp name "${opts.customer.display_name ?? "unknown"}".`) +
       (opts.memories.length ? ` Known facts: ${opts.memories.map((m) => `${m.key}=${m.value}`).join("; ")}.` : ""),
     `REPLY LANGUAGE: ${opts.replyLanguage === "ar" ? "Arabic" : opts.replyLanguage === "he" ? "Hebrew" : opts.replyLanguage === "en" ? "English" : "same as the customer"}.`,
   ];

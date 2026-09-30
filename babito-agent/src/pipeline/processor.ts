@@ -8,6 +8,7 @@ import { maskPhone, type Logger } from "../logger.js";
 import { detectLanguage, toWhatsAppText, truncate } from "../util/text.js";
 import { isPermanentSendError, type WhatsAppSender } from "../whatsapp/client.js";
 import type { EchoMessage, InboundMessage, StatusUpdate } from "../whatsapp/webhook.js";
+import { socialPlatformOf } from "../social/webhook.js";
 import { performHandoff } from "./handoff.js";
 
 export interface ProcessorConfig {
@@ -64,6 +65,10 @@ export class MessageProcessor {
       const stored = await this.db.tx(async (tx) => {
         const customer = await repo.upsertCustomer(tx, m.from, m.profileName);
         const conv = await repo.getOrCreateOpenConversation(tx, customer.id);
+        const platform = socialPlatformOf(m.from);
+        if (platform && (conv as { channel?: string }).channel !== platform) {
+          await tx.query(`update conversations set channel = $2 where id = $1`, [conv.id, platform]);
+        }
         const body = m.text ? truncate(m.text, this.cfg.maxInboundChars) : null;
         const row = await repo.insertInboundMessage(tx, {
           conversationId: conv.id,

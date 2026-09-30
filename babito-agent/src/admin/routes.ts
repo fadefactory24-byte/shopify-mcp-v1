@@ -14,6 +14,15 @@ import { ConnectError, completeWhatsAppOnboarding, connectPageBody, inspectGrant
  * Protected by HTTP Basic auth (user "admin", ADMIN_PASSWORD) + same-origin check on POST.
  */
 const INLINE_MEDIA = new Set(["image/jpeg", "image/png", "image/webp", "video/mp4", "video/3gpp", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "application/pdf"]);
+const CHANNEL_LABELS: Record<string, string> = { email: "email", messenger: "Messenger", instagram: "Instagram" };
+
+/** WhatsApp media is fetched on demand (via /admin/media); Messenger/Instagram attachments carry a direct Meta-hosted URL. */
+function mediaLink(m: { id: string; type: string; media: unknown }) {
+  const media = m.media as { id?: string; url?: string } | null;
+  if (media?.url) return html`<a href="${media.url}" target="_blank" rel="noopener">[${m.type}: open]</a> `;
+  if (media?.id) return html`<a href="/admin/media/${m.id}" target="_blank" rel="noopener">[${m.type}: open]</a> `;
+  return "";
+}
 
 export function adminRoutes(deps: AppDeps) {
   const r = new Hono();
@@ -130,7 +139,7 @@ export function adminRoutes(deps: AppDeps) {
             ${convs.map(
               (cv) => html`<tr>
                 <td><a href="/admin/conversations/${cv.id}">${cv.display_name ?? "—"}</a><br /><span class="muted">${displayHandle(cv.wa_id)}</span></td>
-                <td><span class="pill ${cv.mode}">${cv.mode}</span> <span class="muted">${cv.channel === "email" ? "email" : "WhatsApp"} ${cv.language ?? ""}</span></td>
+                <td><span class="pill ${cv.mode}">${cv.mode}</span> <span class="muted">${CHANNEL_LABELS[cv.channel as string] ?? "WhatsApp"} ${cv.language ?? ""}</span></td>
                 <td style="unicode-bidi:plaintext">${(cv.last_body ?? "").slice(0, 120)}</td>
                 <td class="muted">${new Date(cv.last_message_at).toLocaleString("he-IL")}</td>
               </tr>`,
@@ -181,7 +190,7 @@ export function adminRoutes(deps: AppDeps) {
           <h2>Messages</h2>
           ${msgs.map(
             (m) => html`<div class="msg ${m.direction === "inbound" ? "in" : m.author === "human_agent" ? "staff" : "out"}">
-              ${(m.media as { id?: string } | null)?.id ? html`<a href="/admin/media/${m.id}" target="_blank" rel="noopener">[${m.type}: open]</a> ` : ""}${m.body ?? ((m.media as { id?: string } | null)?.id ? "" : `[${m.type}]`)}
+              ${mediaLink(m)}${m.body ?? (m.media ? "" : `[${m.type}]`)}
               <div class="muted" style="font-size:11px">${m.author} · ${m.status}${m.error ? html` · <span class="bad">${m.error}</span>` : ""} · ${new Date(m.created_at).toLocaleString("he-IL")}</div>
             </div>`,
           )}

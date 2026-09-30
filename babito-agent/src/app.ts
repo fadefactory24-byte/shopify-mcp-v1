@@ -10,6 +10,7 @@ import type { KnowledgeService } from "./agent/knowledge.js";
 import { runMaintenance } from "./maintenance.js";
 import type { WhatsAppSender } from "./whatsapp/client.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "./whatsapp/webhook.js";
+import { MalformedSocialWebhookError, parseSocialWebhook } from "./social/webhook.js";
 
 export interface AppDeps {
   db: Db;
@@ -25,6 +26,10 @@ export interface AppDeps {
     adminPassword: string;
     cronSecret: string;
     production: boolean;
+    /** Facebook Page / Instagram professional account ids; present only when that channel is enabled. */
+    metaPageId?: string;
+    metaInstagramId?: string;
+    socialMaxAgeMs?: number;
     /** Embedded Signup page (/admin/whatsapp-connect); optional. */
     metaAppId?: string;
     embeddedSignupConfigId?: string;
@@ -84,6 +89,31 @@ export function createApp(deps: AppDeps) {
     } catch {
       log.warn({ event: "webhook_malformed", reason: "invalid_json" }, "malformed webhook");
       return c.text("bad request", 400);
+    }
+
+    // Same app, same webhook URL: WhatsApp Business Account payloads and Page/Instagram
+    // messaging payloads are told apart by the top-level `object` field.
+    const object = typeof body === "object" && body !== null ? (body as { object?: unknown }).object : undefined;
+    if (object === "page" || object === "instagram") {
+      let social;
+      try {
+        social = parseSocialWebhook(body, {
+          expectedPageId: deps.config.metaPageId,
+          expectedIgId: deps.config.metaInstagramId,
+          maxAgeMs: deps.config.socialMaxAgeMs,
+        });
+      } catch (err) {
+        if (err instanceof MalformedSocialWebhookError) {
+          log.warn({ event: "webhook_malformed", reason: err.message }, "unsupported social webhook payload");
+          return c.text("ignored", 200);
+        }
+        throw err;
+      }
+      if (social.skipped) log.warn({ event: "webhook_items_skipped", count: social.skipped }, "some social webhook items could not be parsed");
+      const { conversationIds } = await deps.processor.ingest(social.messages);
+      if (social.echoes.length) await deps.processor.applyEchoes(social.echoes);
+      for (const id of conversationIds) deps.processor.schedule(id);
+      return c.text("ok", 200);
     }
 
     let parsed;

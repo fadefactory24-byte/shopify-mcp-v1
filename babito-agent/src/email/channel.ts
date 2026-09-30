@@ -3,6 +3,7 @@ import { repo } from "../db/repo.js";
 import type { Logger } from "../logger.js";
 import type { WhatsAppSender } from "../whatsapp/client.js";
 import type { InboxMessage, MailApi } from "./graph.js";
+import { isSocialHandle, socialIdOf, socialPlatformOf } from "../social/webhook.js";
 
 /**
  * Email as a second channel next to WhatsApp. Customers are keyed by the handle 'email:<address>'.
@@ -24,7 +25,11 @@ export function emailHandle(address: string): string {
 }
 /** Human-readable customer id for alerts and the dashboard. */
 export function displayHandle(handle: string): string {
-  return emailOf(handle) ?? `+${handle}`;
+  const email = emailOf(handle);
+  if (email) return email;
+  const platform = socialPlatformOf(handle);
+  if (platform) return `${platform === "instagram" ? "Instagram" : "Messenger"} user ${socialIdOf(handle)}`;
+  return `+${handle}`;
 }
 
 const AUTOMATED_LOCAL = /^(no-?reply|do-?not-?reply|donotreply|mailer-daemon|postmaster|bounces?|notifications?|notify|alerts?|newsletter|news|marketing|billing|invoices?|receipts?|support-noreply)([+._-].*)?$/i;
@@ -215,19 +220,25 @@ export class EmailChannel {
 }
 
 /**
- * The pipeline's sender: WhatsApp ids go to WhatsApp, 'email:' handles to the mailbox. Read
- * receipts and typing indicators only exist on WhatsApp.
+ * The pipeline's sender: WhatsApp ids go to WhatsApp, 'email:' handles to the mailbox, 'psid:'/
+ * 'igsid:' handles to Messenger/Instagram. Read receipts and typing indicators only exist on
+ * WhatsApp.
  */
 export class ChannelSender implements WhatsAppSender {
   constructor(
     private readonly whatsapp: WhatsAppSender,
     private readonly email: EmailChannel | null,
+    private readonly social: WhatsAppSender | null = null,
   ) {}
 
   async sendText(to: string, body: string) {
     if (isEmailHandle(to)) {
       if (!this.email) throw new Error("email channel is not configured");
       return this.email.sendReply(to, body);
+    }
+    if (isSocialHandle(to)) {
+      if (!this.social) throw new Error("the Messenger/Instagram channel is not configured");
+      return this.social.sendText(to, body);
     }
     return this.whatsapp.sendText(to, body);
   }

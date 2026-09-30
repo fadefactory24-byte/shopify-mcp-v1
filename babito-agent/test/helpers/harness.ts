@@ -21,6 +21,10 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     DEBOUNCE_MS: "30",
     ADMIN_PASSWORD: "admin-password-123",
     CRON_SECRET: "cron-secret",
+    SOCIAL_CHANNEL_ENABLED: "true",
+    META_PAGE_ID: "PAGE_ID",
+    META_INSTAGRAM_ID: "IG_ID",
+    META_PAGE_ACCESS_TOKEN: "test-page-token",
     ...envOverrides,
   });
   const db = await createTestDb();
@@ -28,10 +32,11 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   const llm = new ScriptedLLM();
   const shopify = new FakeShopify();
   const whatsapp = new FakeWhatsApp();
+  const social = new FakeWhatsApp();
   const notifier = new FakeNotifier();
   const tracking = new FakeTracking();
   const mail = new FakeMail();
-  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking, mail });
+  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking, mail, social });
   /** Fake Graph API for the admin's Embedded Signup calls; tests replace it. */
   let metaFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "no fake set" } }), { status: 500 });
   const app = createApp({
@@ -50,6 +55,9 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
       metaAppId: cfg.META_APP_ID,
       embeddedSignupConfigId: cfg.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID,
       graphVersion: cfg.WHATSAPP_GRAPH_VERSION,
+      metaPageId: cfg.META_PAGE_ID || undefined,
+      metaInstagramId: cfg.META_INSTAGRAM_ID || undefined,
+      socialMaxAgeMs: cfg.SOCIAL_MAX_AGE_DAYS * 24 * 3600_000,
     },
     fetchImpl: (...args: Parameters<typeof fetch>) => metaFetch(...args),
   });
@@ -78,7 +86,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     metaFetch = f;
   };
 
-  return { cfg, db, app, llm, shopify, whatsapp, notifier, tracking, services, post, customerSays, q, setMetaFetch, mail, email: services.email, processor: services.processor };
+  return { cfg, db, app, llm, shopify, whatsapp, social, notifier, tracking, services, post, customerSays, q, setMetaFetch, mail, email: services.email, processor: services.processor };
 }
 
 export type Harness = Awaited<ReturnType<typeof createHarness>>;

@@ -270,6 +270,38 @@ export function sign(body: string, secret: string) {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
+// ------------------------------------------------------------------ Social (Messenger/Instagram)
+
+/** A Page (Messenger) or Instagram DM webhook payload, same `entry[].messaging[]` shape as Meta sends. */
+export function socialWebhook(
+  platform: "page" | "instagram",
+  senderId: string,
+  opts: { text?: string; id?: string; recipientId?: string; ageMs?: number; isEcho?: boolean; attachment?: { type: string; url: string }; isDeleted?: boolean } = {},
+) {
+  const timestamp = Date.now() - (opts.ageMs ?? 0);
+  const message: Record<string, unknown> = { mid: opts.id ?? `mid.${++seq}.${Date.now()}` };
+  if (opts.text !== undefined) message.text = opts.text;
+  if (opts.attachment) message.attachments = [{ type: opts.attachment.type, payload: { url: opts.attachment.url } }];
+  if (opts.isEcho) message.is_echo = true;
+  if (opts.isDeleted) message.is_deleted = true;
+  return {
+    object: platform,
+    entry: [
+      {
+        id: opts.recipientId ?? (platform === "instagram" ? "IG_ID" : "PAGE_ID"),
+        messaging: [
+          {
+            sender: { id: opts.isEcho ? (opts.recipientId ?? (platform === "instagram" ? "IG_ID" : "PAGE_ID")) : senderId },
+            recipient: { id: opts.isEcho ? senderId : (opts.recipientId ?? (platform === "instagram" ? "IG_ID" : "PAGE_ID")) },
+            timestamp,
+            message,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 // ------------------------------------------------------------------ Email (Microsoft Graph)
 
 export class FakeMail implements MailApi {

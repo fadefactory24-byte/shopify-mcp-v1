@@ -88,7 +88,8 @@ export interface InboundMessage {
   type: string;
   /** Text we can reason about: text body, button title, or media caption. */
   text: string | null;
-  media: { kind: string; id?: string; mime?: string } | null;
+  /** `id` (WhatsApp, fetched on demand) or `url` (Messenger/Instagram/email, already a link). */
+  media: { kind: string; id?: string; mime?: string; url?: string } | null;
   phoneNumberId: string | null;
 }
 

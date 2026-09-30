@@ -26,6 +26,9 @@ const app = createApp({
     metaAppId: cfg.META_APP_ID,
     embeddedSignupConfigId: cfg.WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID,
     graphVersion: cfg.WHATSAPP_GRAPH_VERSION,
+    metaPageId: cfg.META_PAGE_ID || undefined,
+    metaInstagramId: cfg.META_INSTAGRAM_ID || undefined,
+    socialMaxAgeMs: cfg.SOCIAL_MAX_AGE_DAYS * 24 * 3600_000,
   },
 });
 

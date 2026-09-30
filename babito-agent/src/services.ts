@@ -10,6 +10,7 @@ import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
+import { SocialSender } from "./social/client.js";
 import { SeventeenTrack, type TrackingService } from "./tracking/tracking.js";
 import { WhatsAppCloudClient, type WhatsAppSender } from "./whatsapp/client.js";
 
@@ -24,6 +25,8 @@ export interface Services {
   processor: MessageProcessor;
   /** Present when the email channel is enabled. */
   email: EmailChannel | null;
+  /** Present when the Messenger/Instagram channel is enabled; app.ts's webhook route uses it to send. */
+  social: WhatsAppSender | null;
 }
 
 /** Wire real implementations; tests pass fakes via `overrides`. */
@@ -31,7 +34,7 @@ export function buildServices(
   cfg: Config,
   db: Db,
   log: Logger,
-  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier">> & { tracking?: TrackingService; mail?: MailApi } = {},
+  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier" | "social">> & { tracking?: TrackingService; mail?: MailApi } = {},
 ): Services {
   const tracking = overrides.tracking ?? (cfg.SEVENTEENTRACK_API_KEY ? new SeventeenTrack({ apiKey: cfg.SEVENTEENTRACK_API_KEY }) : undefined);
   const whatsapp =
@@ -70,7 +73,12 @@ export function buildServices(
           },
         })
       : null;
-  const sender = new ChannelSender(whatsapp, email);
+  const social: WhatsAppSender | null =
+    overrides.social ??
+    (cfg.SOCIAL_CHANNEL_ENABLED && cfg.META_PAGE_ACCESS_TOKEN
+      ? new SocialSender({ pageAccessToken: cfg.META_PAGE_ACCESS_TOKEN, pageId: cfg.META_PAGE_ID, instagramId: cfg.META_INSTAGRAM_ID, graphVersion: cfg.WHATSAPP_GRAPH_VERSION })
+      : null);
+  const sender = new ChannelSender(whatsapp, email, social);
   const alertTo = cfg.STAFF_NOTIFY_EMAIL.split(",").map((s) => s.trim()).filter(Boolean);
   const llm = overrides.llm ?? new AnthropicProvider({ apiKey: cfg.ANTHROPIC_API_KEY, refusalFallback: cfg.AI_REFUSAL_FALLBACK });
   const knowledge = new KnowledgeService(db, shopify);
@@ -109,5 +117,5 @@ export function buildServices(
     },
   );
   processorRef = processor;
-  return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, email };
+  return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, email, social };
 }
