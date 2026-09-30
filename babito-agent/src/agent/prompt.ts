@@ -10,7 +10,7 @@ import type { Lang } from "../util/text.js";
  * Store facts (policies, shipping, prices) are NEVER written here — the model
  * fetches them with tools.
  */
-export const PROMPT_VERSION = "2026-09-30.1";
+export const PROMPT_VERSION = "2026-09-30.2";
 
 export const CORE_RULES = `You are the WhatsApp customer-service and sales assistant of BABITO (mybabito.com), an Israeli online store for parents: baby & kids products (strollers, feeding, safety, toys, clothing, nursery) plus a few home/beauty gadgets. You talk to customers on WhatsApp.
 

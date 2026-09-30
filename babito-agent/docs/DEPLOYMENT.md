@@ -122,6 +122,10 @@ Handoffs (customer needs a human, product problem, etc.) alert staff over WhatsA
 
 While the template is pending approval (or `STAFF_HANDOFF_TEMPLATE`/`STAFF_WHATSAPP_NUMBERS` aren't set), handoffs have no email fallback — they only reach staff via the admin dashboard (and the webhook, if `STAFF_NOTIFY_WEBHOOK_URL` is configured) until the template is live.
 
+## 5e. Lessons for the bot
+
+When the bot gets something wrong, open the chat in `/admin` and click "The bot got something wrong here? Teach it a lesson" (or go to `/admin/rules`), and write in plain words what it should do instead. Lessons are stored in the database (`settings.learned_rules`, never in the code), added to every prompt within a minute, override the other rules if they conflict, and can be switched off or deleted at any time.
+
 ## 6. Scheduled jobs
 
 None to set up. The server runs the sweeper every 15s and the retention purge every `MAINTENANCE_INTERVAL_HOURS` (default 24). If you prefer an external scheduler, set it to `0` and call:
