@@ -291,6 +291,47 @@ describe("staff email alerts", () => {
     await n.systemAlert("WhatsApp send failed", "boom again");
     expect(sent.filter((s) => s.subject.includes("System alert"))).toHaveLength(1);
   });
+
+  it("handoff with a configured template sends via sendTemplate instead of plain text, sanitizing params", async () => {
+    const templateSends: { to: string; template: string; language: string; bodyParams: string[] }[] = [];
+    const wa = {
+      sendText: async () => ({ waMessageId: "should-not-be-called" }),
+      sendTemplate: async (to: string, template: string, language: string, bodyParams: string[]) => {
+        templateSends.push({ to, template, language, bodyParams });
+        return { waMessageId: "wamid.tpl" };
+      },
+    } as any;
+    const n = new StaffNotifier({
+      webhookUrl: "",
+      staffNumbers: ["972507406322"],
+      whatsapp: wa,
+      email: null,
+      handoffTemplate: { name: "babito_staff_handoff", language: "en" },
+      log,
+    });
+    await n.notify({
+      handoffId: "h2",
+      conversationId: "c2",
+      customerWaId: "972501234567",
+      customerName: "Dana",
+      reason: "complaint",
+      priority: "high",
+      summary: "The\nstroller wheel\n\nis broken",
+      orderName: "#1042",
+    });
+    expect(templateSends).toEqual([
+      { to: "972507406322", template: "babito_staff_handoff", language: "en", bodyParams: ["Dana +972501234567", "complaint | Order #1042", "The stroller wheel is broken"] },
+    ]);
+  });
+
+  it("handoff falls back to plain sendText when no template is configured, or the sender lacks sendTemplate", async () => {
+    const sent: { to: string; body: string }[] = [];
+    const wa = { sendText: async (to: string, body: string) => (sent.push({ to, body }), { waMessageId: "x" }) } as any;
+    const n = new StaffNotifier({ webhookUrl: "", staffNumbers: ["972507406322"], whatsapp: wa, email: null, log });
+    await n.notify({ handoffId: "h3", conversationId: "c3", customerWaId: "972501234567", customerName: "Dana", reason: "complaint", priority: "normal", summary: "x" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.to).toBe("972507406322");
+  });
 });
 
 describe("email channel units", () => {

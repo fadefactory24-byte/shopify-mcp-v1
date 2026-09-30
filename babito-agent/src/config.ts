@@ -77,6 +77,13 @@ const ConfigSchema = z.object({
   STAFF_WHATSAPP_NUMBERS: z.string().optional().default(""),
   /** Staff alert emails (handoffs, customer waiting, system problems), sent from the support mailbox. */
   STAFF_NOTIFY_EMAIL: z.string().optional().default(""),
+  /**
+   * Approved WhatsApp message template for staff handoff alerts (body params: customer, reason,
+   * summary, in that order). Delivers even outside the 24h window, unlike a plain sendText to
+   * STAFF_WHATSAPP_NUMBERS. Leave empty until the template is approved in WhatsApp Manager.
+   */
+  STAFF_HANDOFF_TEMPLATE: z.string().optional().default(""),
+  STAFF_HANDOFF_TEMPLATE_LANG: z.string().default("en"),
 
   // Email channel: the support mailbox (Microsoft 365) through Microsoft Graph, delegated access.
   EMAIL_CHANNEL_ENABLED: bool(false),

@@ -91,6 +91,7 @@ export function buildServices(
       adminBaseUrl: publicBaseUrl(cfg),
       email: mail && alertTo.length ? { send: (subject, text) => mail.sendMail(alertTo, subject, text) } : null,
       flagEmail: email ? (handle) => email.flagLatest(handle) : undefined,
+      handoffTemplate: cfg.STAFF_HANDOFF_TEMPLATE ? { name: cfg.STAFF_HANDOFF_TEMPLATE, language: cfg.STAFF_HANDOFF_TEMPLATE_LANG } : undefined,
       log,
     });
   const processor = new MessageProcessor(

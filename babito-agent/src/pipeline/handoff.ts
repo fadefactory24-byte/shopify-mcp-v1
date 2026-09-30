@@ -42,9 +42,10 @@ const ALERT_EVERY_MS = 60 * 60_000;
 
 /**
  * Notifies staff via a generic webhook (point it at n8n / Slack / Make) and/or
- * WhatsApp messages to staff numbers. Staff WhatsApp delivery only works if the
- * staff member messaged the business number in the last 24h (Meta rule) —
- * the webhook is the reliable channel.
+ * WhatsApp messages to staff numbers. Plain-text staff WhatsApp delivery only works if the
+ * staff member messaged the business number in the last 24h (Meta rule); when an approved
+ * message template is configured (handoffTemplate), that's used instead so delivery doesn't
+ * depend on the 24h window — the reliable way to reach staff on WhatsApp.
  */
 export class StaffNotifier implements HandoffNotifier {
   private lastWaiting = new Map<string, number>();
@@ -59,6 +60,8 @@ export class StaffNotifier implements HandoffNotifier {
       email?: AlertEmail | null;
       /** Handoff on an email conversation: flag the customer's email in the mailbox. */
       flagEmail?: (handle: string) => Promise<void>;
+      /** Approved WhatsApp template for handoff alerts: body params are [customer, reason, summary]. */
+      handoffTemplate?: { name: string; language: string };
       log: Logger;
       now?: () => number;
     },
@@ -123,7 +126,18 @@ export class StaffNotifier implements HandoffNotifier {
       );
     }
     if (this.opts.flagEmail && isEmailHandle(n.customerWaId)) tasks.push(this.opts.flagEmail(n.customerWaId));
-    for (const num of this.opts.staffNumbers) tasks.push(this.opts.whatsapp.sendText(num, text));
+    const template = this.opts.handoffTemplate;
+    if (template && this.opts.whatsapp.sendTemplate) {
+      // Template params can't contain newlines or be empty (WhatsApp rejects both).
+      const oneLine = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 300) || "-";
+      const customer = oneLine(`${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`);
+      const reason = oneLine(`${n.reason}${n.orderName ? ` | Order ${n.orderName}` : ""}${n.changeType ? ` | ${n.changeType}` : ""}`);
+      const summary = oneLine(n.summary ?? "(no summary)");
+      const sendTemplate = this.opts.whatsapp.sendTemplate;
+      for (const num of this.opts.staffNumbers) tasks.push(sendTemplate(num, template.name, template.language, [customer, reason, summary]));
+    } else {
+      for (const num of this.opts.staffNumbers) tasks.push(this.opts.whatsapp.sendText(num, text));
+    }
     const results = await Promise.allSettled(tasks);
     for (const r of results) if (r.status === "rejected") this.opts.log.warn({ err: String(r.reason), handoffId: n.handoffId }, "staff notification failed");
   }

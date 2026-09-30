@@ -126,6 +126,24 @@ describe("WhatsApp client", () => {
     expect(JSON.parse(String(calls[1]!.init.body))).toMatchObject({ messaging_product: "whatsapp", to: "972501234567", type: "text", text: { body: "hi" } });
   });
 
+  it("sends a template with body params, for staff alerts outside the 24h window", async () => {
+    const { f, calls } = mockFetch([json({ messages: [{ id: "wamid.tpl.1" }] })]);
+    const c = new WhatsAppCloudClient({ accessToken: "tok", phoneNumberId: "PNID", graphVersion: "v23.0", fetchImpl: f });
+    await expect(c.sendTemplate("972507406322", "babito_staff_handoff", "en", ["Dana Levi", "product_problem", "strap broke"])).resolves.toEqual({
+      waMessageId: "wamid.tpl.1",
+    });
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({
+      messaging_product: "whatsapp",
+      to: "972507406322",
+      type: "template",
+      template: {
+        name: "babito_staff_handoff",
+        language: { code: "en" },
+        components: [{ type: "body", parameters: [{ type: "text", text: "Dana Levi" }, { type: "text", text: "product_problem" }, { type: "text", text: "strap broke" }] }],
+      },
+    });
+  });
+
   it("downloads media in two authenticated steps and refuses oversized files", async () => {
     const { f, calls } = mockFetch([
       json({ url: "https://lookaside.fbsbx.com/media/abc", mime_type: "image/jpeg", file_size: 3 }),

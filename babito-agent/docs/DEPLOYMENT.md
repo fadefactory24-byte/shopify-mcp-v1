@@ -102,6 +102,26 @@ To ignore a supplier/personal contact on Messenger or Instagram, use "Ignore thi
 
 Send a DM to the Page or the Instagram account. You should see `message_received` → `agent_run` → `message_sent` in the logs, and the chat at `https://<your-domain>/admin` (labeled "Messenger" or "Instagram").
 
+## 5d. Staff WhatsApp alerts (handoffs) with a message template
+
+`STAFF_NOTIFY_EMAIL` handoff alerts (customer needs a human, product problem, etc.) work out of the box. To also (or instead) get them as a WhatsApp message on a staff member's own phone reliably — not just when that number has texted the business number in the last 24h — use an approved WhatsApp message template:
+
+1. Meta Business Suite → WhatsApp Manager → your WhatsApp Business Account → Message templates → Create template.
+2. Category **Utility**, type **Standard**. Body (3 variables, in this order — customer, reason, summary), e.g.:
+   ```
+   New BABITO handoff needed - please take over this conversation.
+
+   Customer: {{1}}
+   Reason: {{2}}
+   Summary: {{3}}
+
+   Reply when you can.
+   ```
+   (A variable can't be the very first or very last thing in the body — keep static text before `{{1}}` and after `{{3}}`.) Fill in an example value for each variable, then submit for review (usually approved within minutes to a few hours).
+3. Once approved, set `STAFF_HANDOFF_TEMPLATE` to the template's name (e.g. `babito_staff_handoff`) and `STAFF_HANDOFF_TEMPLATE_LANG` to its language code (`en` for plain "English"); add the staff phone number(s) to `STAFF_WHATSAPP_NUMBERS` (comma-separated, international format e.g. `972501234567`, no `+`). Deploy.
+
+While the template is pending or not configured, handoffs still email as before — `STAFF_HANDOFF_TEMPLATE` empty is a safe default.
+
 ## 6. Scheduled jobs
 
 None to set up. The server runs the sweeper every 15s and the retention purge every `MAINTENANCE_INTERVAL_HOURS` (default 24). If you prefer an external scheduler, set it to `0` and call:

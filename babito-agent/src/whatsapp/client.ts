@@ -5,6 +5,12 @@ export interface WhatsAppSender {
   markRead(waMessageId: string, typing: boolean): Promise<void>;
   /** Fetch an inbound media file (photo, video, document) so staff can view it in the dashboard. */
   downloadMedia?(mediaId: string): Promise<{ contentType: string; data: ArrayBuffer }>;
+  /**
+   * Send an approved message template (body-only, {{1}}..{{n}} params in order). Unlike sendText,
+   * this is delivered even outside the 24h customer-service window — the only reliable way to
+   * reach a WhatsApp number the business hasn't been messaged by recently (e.g. a staff alert).
+   */
+  sendTemplate?(to: string, template: string, language: string, bodyParams: string[]): Promise<{ waMessageId: string }>;
 }
 
 const MAX_MEDIA_BYTES = 25 * 1024 * 1024;
@@ -79,6 +85,26 @@ export class WhatsAppCloudClient implements WhatsAppSender {
       type: "text",
       text: { preview_url: true, body },
     }, { retryNetworkErrors: false }); // a timed-out send may already be delivered; retrying would duplicate it
+    const id = json?.messages?.[0]?.id;
+    if (!id) throw new WhatsAppApiError("WhatsApp API returned no message id", 200);
+    return { waMessageId: id as string };
+  }
+
+  async sendTemplate(to: string, template: string, language: string, bodyParams: string[]) {
+    const json = await this.post(
+      {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "template",
+        template: {
+          name: template,
+          language: { code: language },
+          components: bodyParams.length ? [{ type: "body", parameters: bodyParams.map((text) => ({ type: "text", text })) }] : [],
+        },
+      },
+      { retryNetworkErrors: false },
+    );
     const id = json?.messages?.[0]?.id;
     if (!id) throw new WhatsAppApiError("WhatsApp API returned no message id", 200);
     return { waMessageId: id as string };
