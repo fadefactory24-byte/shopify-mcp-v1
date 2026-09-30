@@ -997,3 +997,36 @@ describe("social channel (Facebook Messenger / Instagram DMs)", () => {
     expect(h.social.sent).toHaveLength(1); // no new reply
   });
 });
+
+describe("lessons for the bot (learned rules)", () => {
+  const auth = { Authorization: `Basic ${Buffer.from("admin:admin-password-123").toString("base64")}`, Origin: "http://localhost", Host: "localhost" };
+  const form = { ...auth, "content-type": "application/x-www-form-urlencoded" };
+  const post = (path: string, body = "") => h.app.request(`http://localhost/admin${path}`, { method: "POST", headers: form, body });
+
+  it("an added lesson reaches the prompt; switching it off or deleting it removes it", async () => {
+    const add = await post("/rules/add", `text=${encodeURIComponent("LESSON-XYZ: never promise a delivery date")}`);
+    expect(add.status).toBe(302);
+    const page = await (await h.app.request("http://localhost/admin/rules", { headers: auth })).text();
+    expect(page).toContain("LESSON-XYZ");
+
+    h.llm.push(say("שלום"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(JSON.stringify(h.llm.requests[0])).toContain("LESSON-XYZ: never promise a delivery date");
+
+    const [{ value }] = await h.q(`select value from settings where key = 'learned_rules'`);
+    const id = value[0].id;
+    await post(`/rules/${id}/toggle`);
+    h.llm.push(say("שוב"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "עוד שאלה", { id: "wamid.l2" }));
+    expect(JSON.stringify(h.llm.requests[1])).not.toContain("LESSON-XYZ");
+
+    await post(`/rules/${id}/delete`);
+    expect((await h.q(`select value from settings where key = 'learned_rules'`))[0].value).toEqual([]);
+  });
+
+  it("requires auth and same-origin POST", async () => {
+    expect((await h.app.request("http://localhost/admin/rules")).status).toBe(401);
+    const csrf = await h.app.request("http://localhost/admin/rules/add", { method: "POST", headers: { ...form, Origin: "https://evil.example" }, body: "text=x" });
+    expect(csrf.status).toBe(403);
+  });
+});

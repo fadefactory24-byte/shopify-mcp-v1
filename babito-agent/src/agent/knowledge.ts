@@ -15,11 +15,32 @@ export interface Settings {
   personaNotes: string;
   /** Owner's business rules (settings.store_rules). Kept in the database so they never land in the public repo. */
   storeRules: string;
+  /** Active rules added from the dashboard after real mistakes (settings.learned_rules), one per line. */
+  learnedRules: string;
   businessHours: { timezone: string; days: Record<string, [string, string] | null> } | null;
   handoffExpectation: Record<string, string>;
   unsupportedMediaReply: Record<string, string>;
   /** Reply to a photo/video/document without text: we can't see it, so ask what it's about. */
   mediaReceivedReply: Record<string, string>;
+}
+
+export interface LearnedRule {
+  id: string;
+  text: string;
+  at: string;
+  active: boolean;
+}
+
+/** settings.learned_rules is a JSON array; tolerate anything malformed by ignoring it. */
+export function parseLearnedRules(raw: unknown): LearnedRule[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (r): r is LearnedRule => Boolean(r) && typeof r.id === "string" && typeof r.text === "string" && r.text.trim() !== "" && typeof r.at === "string" && typeof r.active === "boolean",
+  );
+}
+
+export function activeLearnedRules(raw: unknown): LearnedRule[] {
+  return parseLearnedRules(raw).filter((r) => r.active);
 }
 
 const DEFAULT_HANDOFF: Record<string, string> = {
@@ -89,6 +110,7 @@ export class KnowledgeService {
       botEnabled: raw.bot_enabled !== false,
       personaNotes: typeof raw.persona_notes === "string" ? raw.persona_notes : "",
       storeRules: typeof raw.store_rules === "string" ? raw.store_rules : "",
+      learnedRules: activeLearnedRules(raw.learned_rules).map((r) => `- ${r.text}`).join("\n"),
       businessHours: (raw.business_hours as Settings["businessHours"]) ?? null,
       handoffExpectation: { ...DEFAULT_HANDOFF, ...((raw.handoff_expectation as Record<string, string>) ?? {}) },
       unsupportedMediaReply: (raw.unsupported_media_reply as Record<string, string>) ?? {

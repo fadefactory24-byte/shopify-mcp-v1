@@ -65,6 +65,7 @@ export async function runAgent(
   const systemStatic = `${CORE_RULES}\n\n${businessLayer({
     personaNotes: settings.personaNotes,
     storeRules: settings.storeRules,
+    learnedRules: settings.learnedRules,
     knowledgeIndex: kbIndex,
     staffHoursText: staffHoursText(settings.businessHours?.days as Record<string, [string, string] | null> | undefined),
   })}`;

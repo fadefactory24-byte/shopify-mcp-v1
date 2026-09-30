@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import { basicAuth } from "hono/basic-auth";
 import { html } from "hono/html";
 import type { AppDeps } from "../app.js";
+import { parseLearnedRules } from "../agent/knowledge.js";
 import { repo } from "../db/repo.js";
 import { displayHandle, emailHandle } from "../email/channel.js";
 import { normalizePhone } from "../util/phone.js";
@@ -112,7 +114,7 @@ export function adminRoutes(deps: AppDeps) {
       page(
         "Dashboard",
         html`<h1>BABITO WhatsApp Agent</h1>
-          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a> · <a href="/admin/blocked">Ignored contacts (suppliers etc.)</a></p>
+          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a> · <a href="/admin/blocked">Ignored contacts (suppliers etc.)</a> · <a href="/admin/rules">Lessons for the bot</a></p>
           <div class="stats">
             ${stat("Inbound msgs (24h)", stats.inbound_24h!)} ${stat("AI runs (24h)", stats.runs_24h!)}
             ${stat("Failed runs (24h)", stats.failed_24h!, Number(stats.failed_24h) ? "bad" : "")}
@@ -184,6 +186,7 @@ export function adminRoutes(deps: AppDeps) {
               ? html`<form class="inline" method="post" action="/admin/customers/${customer.id}/unblock"><button>Stop ignoring (let AI reply again)</button></form>`
               : html`<form class="inline" method="post" action="/admin/customers/${customer.id}/block" onsubmit="return confirm('The AI will never reply to this contact again (e.g. a supplier). Their messages still arrive here for you to answer manually.')"><button>Ignore this contact (supplier etc.)</button></form>`}
           </p>
+          <p><a href="/admin/rules?conv=${id}">The bot got something wrong here? Teach it a lesson</a></p>
           ${customer.is_blocked ? html`<p class="bad">This contact is on the ignore list: the AI never replies to them, only staff.</p>` : ""}
           ${conv.summary ? html`<p class="muted">Summary: ${conv.summary}</p>` : ""}
           ${handoffs.length ? html`<p>Handoffs: ${handoffs.map((h) => html`<span class="pill">${h.status}: ${h.reason}</span> `)}</p>` : ""}
@@ -406,6 +409,77 @@ export function adminRoutes(deps: AppDeps) {
       deps.log.warn({ event: "whatsapp_connect_inspect_failed", error: message }, "grant inspection failed");
       return c.json({ error: message }, 502);
     }
+  });
+
+  /**
+   * Lessons for the bot: rules the owner adds after seeing a real mistake. Stored in the database
+   * (settings.learned_rules), injected into every prompt, never in the public code.
+   */
+  const loadRules = async () => parseLearnedRules((await repo.allSettings(db)).learned_rules);
+  const saveRules = async (rules: ReturnType<typeof parseLearnedRules>) => {
+    await repo.setSetting(db, "learned_rules", rules);
+    deps.knowledge.invalidate();
+  };
+
+  r.get("/rules", async (c) => {
+    const rules = await loadRules();
+    const convId = c.req.query("conv") ?? "";
+    const context = /^[0-9a-f-]{36}$/.test(convId)
+      ? (await db.query<any>(`select direction, author, body from messages where conversation_id = $1 and body is not null order by created_at desc limit 6`, [convId])).rows.reverse()
+      : [];
+    return c.html(
+      page(
+        "Lessons for the bot",
+        html`<h1>Lessons for the bot</h1>
+          <p class="muted">Each lesson is an instruction the bot follows in every conversation from now on (it overrides the other rules if they conflict). Write what went wrong and what it should do instead, in plain words. Effective within a minute.</p>
+          ${context.length
+            ? html`<h2>The conversation you came from</h2>
+                ${context.map((m: any) => html`<div class="msg ${m.direction === "inbound" ? "in" : m.author === "human_agent" ? "staff" : "out"}">${m.body}</div>`)}`
+            : ""}
+          <form method="post" action="/admin/rules/add">
+            <textarea name="text" required maxlength="1000" placeholder="e.g. When a customer asks about tracking that shows no updates, never promise a delivery date; say the team will check with the courier."></textarea>
+            <button>Add lesson</button>
+          </form>
+          <h2>Current lessons</h2>
+          <table>
+            ${rules.map(
+              (rule) => html`<tr>
+                <td style="unicode-bidi:plaintext">${rule.text}<br /><span class="muted">${new Date(rule.at).toLocaleDateString("he-IL")} · ${rule.active ? "active" : "switched off"}</span></td>
+                <td>
+                  <form class="inline" method="post" action="/admin/rules/${rule.id}/toggle"><button>${rule.active ? "Switch off" : "Switch on"}</button></form>
+                  <form class="inline" method="post" action="/admin/rules/${rule.id}/delete" onsubmit="return confirm('Delete this lesson?')"><button>Delete</button></form>
+                </td>
+              </tr>`,
+            )}
+            ${rules.length === 0 ? html`<tr><td class="muted">No lessons yet.</td></tr>` : ""}
+          </table>`,
+      ),
+    );
+  });
+
+  r.post("/rules/add", async (c) => {
+    const text = String((await c.req.parseBody()).text ?? "").replace(/\s+/g, " ").trim().slice(0, 1000);
+    if (text) {
+      const rules = await loadRules();
+      const rule = { id: randomUUID(), text, at: new Date().toISOString(), active: true };
+      await saveRules([...rules, rule]);
+      await repo.audit(db, "admin", "add_learned_rule", "setting", rule.id);
+    }
+    return c.redirect("/admin/rules");
+  });
+
+  r.post("/rules/:id/toggle", async (c) => {
+    const id = c.req.param("id");
+    await saveRules((await loadRules()).map((rule) => (rule.id === id ? { ...rule, active: !rule.active } : rule)));
+    await repo.audit(db, "admin", "toggle_learned_rule", "setting", id);
+    return c.redirect("/admin/rules");
+  });
+
+  r.post("/rules/:id/delete", async (c) => {
+    const id = c.req.param("id");
+    await saveRules((await loadRules()).filter((rule) => rule.id !== id));
+    await repo.audit(db, "admin", "delete_learned_rule", "setting", id);
+    return c.redirect("/admin/rules");
   });
 
   r.post("/kb/reload", async (c) => {

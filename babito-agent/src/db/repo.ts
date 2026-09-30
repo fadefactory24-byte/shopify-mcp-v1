@@ -518,6 +518,13 @@ export const repo = {
     return Object.fromEntries(rows.map((r) => [r.key, r.value]));
   },
 
+  async setSetting(db: Db, key: string, value: unknown) {
+    await db.query(
+      `insert into settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`,
+      [key, JSON.stringify(value)],
+    );
+  },
+
   async audit(db: Db, actor: string, action: string, entity: string | null, entityId: string | null, details: Record<string, unknown> = {}) {
     await db.query(`insert into audit_log (actor, action, entity, entity_id, details) values ($1, $2, $3, $4, $5::jsonb)`, [
       actor,
