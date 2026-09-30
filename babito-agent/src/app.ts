@@ -11,6 +11,7 @@ import { runMaintenance } from "./maintenance.js";
 import type { WhatsAppSender } from "./whatsapp/client.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "./whatsapp/webhook.js";
 import { MalformedSocialWebhookError, parseSocialWebhook } from "./social/webhook.js";
+import { runMigrations } from "./db/migrate.js";
 
 export interface AppDeps {
   db: Db;
@@ -144,6 +145,20 @@ export function createApp(deps: AppDeps) {
   app.post("/cron/sweep", async (c) => {
     if (!cronAuth(c.req.header("authorization"))) return c.text("unauthorized", 401);
     return c.json(await deps.processor.sweep());
+  });
+
+  // Applies any not-yet-applied supabase/migrations/*.sql against this server's own DB
+  // connection, so a deploy can be followed up without anyone handling DATABASE_URL by hand.
+  app.post("/cron/migrate", async (c) => {
+    if (!cronAuth(c.req.header("authorization"))) return c.text("unauthorized", 401);
+    try {
+      const { applied } = await runMigrations(deps.db);
+      log.info({ event: "migrations_applied", applied }, "migrations checked");
+      return c.json({ applied });
+    } catch (err) {
+      log.error({ event: "migration_failed", err: String(err) }, "migration failed");
+      return c.text(`migration failed: ${String(err)}`, 500);
+    }
   });
 
   app.post("/cron/maintenance", async (c) => {

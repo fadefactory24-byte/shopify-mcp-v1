@@ -1,4 +1,10 @@
+import { PGlite } from "@electric-sql/pglite";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Db } from "../src/db/client.js";
+import { runMigrations } from "../src/db/migrate.js";
 import { StaffNotifier } from "../src/pipeline/handoff.js";
 import { GraphMailClient } from "../src/email/graph.js";
 import { skipReason } from "../src/email/channel.js";
@@ -331,5 +337,76 @@ describe("email channel units", () => {
     expect(JSON.parse(calls[1]!.body!)).toEqual({ message: { body: { contentType: "Text", content: "hello" } } });
     expect(calls[2]!.url).toBe("https://graph.microsoft.com/v1.0/me/messages/draft-1/send");
     expect(JSON.parse(calls[3]!.body!).saveToSentItems).toBe(false);
+  });
+});
+
+describe("migration runner (scripts/migrate.ts, POST /cron/migrate)", () => {
+  async function blankDb(): Promise<Db & { close(): Promise<void> }> {
+    const pg = new PGlite();
+    return {
+      query: async <T>(text: string, params?: unknown[]) => ({ rows: (await pg.query<T>(text, params as any[])).rows }),
+      tx<T>(fn: (d: Db) => Promise<T>) {
+        return pg.transaction(async (t) => {
+          const inner: Db = { query: async <R>(text: string, params?: unknown[]) => ({ rows: (await t.query<R>(text, params as any[])).rows }), tx: (f) => f(inner), close: async () => {} };
+          return fn(inner);
+        }) as Promise<T>;
+      },
+      close: () => pg.close(),
+    };
+  }
+
+  it("applies pending files in filename order, tracks them, and skips them on the next run", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "babito-migrate-"));
+    const db = await blankDb();
+    try {
+      await writeFile(join(dir, "0001_a.sql"), `create table widgets (id int primary key);`);
+      await writeFile(join(dir, "0002_b.sql"), `insert into widgets (id) values (1);`);
+      const first = await runMigrations(db, dir);
+      expect(first.applied).toEqual(["0001_a.sql", "0002_b.sql"]);
+      expect((await db.query<{ id: number }>(`select id from widgets`)).rows).toEqual([{ id: 1 }]);
+
+      const second = await runMigrations(db, dir);
+      expect(second.applied).toEqual([]); // already tracked in app_migrations
+
+      // A new file added later is picked up; the earlier ones are not re-run.
+      await writeFile(join(dir, "0003_c.sql"), `insert into widgets (id) values (2);`);
+      const third = await runMigrations(db, dir);
+      expect(third.applied).toEqual(["0003_c.sql"]);
+      expect((await db.query<{ n: number }>(`select count(*)::int n from widgets`)).rows).toEqual([{ n: 2 }]);
+    } finally {
+      await db.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rolls back a failing migration and leaves it untracked", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "babito-migrate-"));
+    const db = await blankDb();
+    try {
+      await writeFile(join(dir, "0001_bad.sql"), `create table this is not valid sql;`);
+      await expect(runMigrations(db, dir)).rejects.toThrow();
+      expect((await db.query(`select 1 from information_schema.tables where table_name = 'app_migrations'`)).rows).toHaveLength(1);
+      expect((await db.query(`select name from app_migrations`)).rows).toEqual([]);
+    } finally {
+      await db.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("POST /cron/migrate requires the cron secret and reports what it applied", async () => {
+    const { createHarness } = await import("./helpers/harness.js");
+    const h = await createHarness();
+    try {
+      const unauthed = await h.app.request("/cron/migrate", { method: "POST" });
+      expect(unauthed.status).toBe(401);
+      // The harness DB already has every real migration tracked (see helpers/pglite.ts), so
+      // there's nothing pending: this proves the route runs cleanly against a real schema.
+      const res = await h.app.request("/cron/migrate", { method: "POST", headers: { Authorization: "Bearer cron-secret" } });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ applied: [] });
+    } finally {
+      h.processor.stopTimers();
+      await h.db.close();
+    }
   });
 });
