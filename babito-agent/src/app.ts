@@ -18,6 +18,8 @@ export interface AppDeps {
   log: Logger;
   processor: MessageProcessor;
   knowledge: KnowledgeService;
+  /** Dashboard test button: sends the staff handoff alert now and reports per number. */
+  sendTestStaffAlert?: () => Promise<{ to: string; ok: boolean; detail: string }[]>;
   /** Used by the dashboard to show customer photos/videos/documents. */
   media?: Pick<WhatsAppSender, "downloadMedia">;
   config: {

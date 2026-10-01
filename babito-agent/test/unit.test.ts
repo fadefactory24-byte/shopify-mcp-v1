@@ -447,3 +447,21 @@ describe("migration runner (scripts/migrate.ts, POST /cron/migrate)", () => {
     }
   });
 });
+
+describe("staff alert test button", () => {
+  const log = { warn: () => {}, info: () => {}, error: () => {} } as any;
+  it("reports per number whether the template was accepted, including the API's error", async () => {
+    const wa = {
+      sendText: async () => ({ waMessageId: "x" }),
+      sendTemplate: async (to: string) => {
+        if (to === "972500000000") throw new Error("WhatsApp API 400 (code 132001): Template name does not exist in the translation");
+        return { waMessageId: "w" };
+      },
+    } as any;
+    const n = new StaffNotifier({ webhookUrl: "", staffNumbers: ["972507406322", "972500000000"], whatsapp: wa, email: null, handoffTemplate: { name: "babito_staff_handoff", language: "en" }, log });
+    const r = await n.sendTest();
+    expect(r.map((x) => [x.to, x.ok])).toEqual([["972507406322", true], ["972500000000", false]]);
+    expect(r[1]!.detail).toContain("132001");
+    expect(await new StaffNotifier({ webhookUrl: "", staffNumbers: [], whatsapp: wa, email: null, log }).sendTest()).toEqual([{ to: "-", ok: false, detail: "STAFF_WHATSAPP_NUMBERS is empty" }]);
+  });
+});

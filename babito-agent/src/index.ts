@@ -4,11 +4,14 @@ import { runMaintenance } from "./maintenance.js";
 import { loadConfig, redactedConfigSummary } from "./config.js";
 import { createPgDb } from "./db/client.js";
 import { logger } from "./logger.js";
+import { StaffNotifier } from "./pipeline/handoff.js";
 import { buildServices } from "./services.js";
 
 const cfg = loadConfig();
 const db = createPgDb({ connectionString: cfg.DATABASE_URL, ssl: cfg.DATABASE_SSL, sslCa: cfg.DATABASE_SSL_CA || undefined, max: cfg.DATABASE_POOL_MAX });
 const services = buildServices(cfg, db, logger);
+
+const staffNotifier = services.notifier instanceof StaffNotifier ? services.notifier : null;
 
 const app = createApp({
   db,
@@ -16,6 +19,7 @@ const app = createApp({
   processor: services.processor,
   knowledge: services.knowledge,
   media: services.whatsapp,
+  sendTestStaffAlert: staffNotifier ? () => staffNotifier.sendTest() : undefined,
   config: {
     verifyToken: cfg.WHATSAPP_VERIFY_TOKEN,
     appSecret: cfg.WHATSAPP_APP_SECRET,

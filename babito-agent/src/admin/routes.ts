@@ -114,7 +114,7 @@ export function adminRoutes(deps: AppDeps) {
       page(
         "Dashboard",
         html`<h1>BABITO WhatsApp Agent</h1>
-          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a> · <a href="/admin/blocked">Ignored contacts (suppliers etc.)</a> · <a href="/admin/rules">Lessons for the bot</a></p>
+          <p class="muted"><a href="/admin/whatsapp-connect">Connect a WhatsApp number</a> · <a href="/admin/blocked">Ignored contacts (suppliers etc.)</a> · <a href="/admin/rules">Lessons for the bot</a> · <form class="inline" method="post" action="/admin/test-staff-alert"><button>Send a test alert to staff WhatsApp</button></form></p>
           <div class="stats">
             ${stat("Inbound msgs (24h)", stats.inbound_24h!)} ${stat("AI runs (24h)", stats.runs_24h!)}
             ${stat("Failed runs (24h)", stats.failed_24h!, Number(stats.failed_24h) ? "bad" : "")}
@@ -480,6 +480,20 @@ export function adminRoutes(deps: AppDeps) {
     await saveRules((await loadRules()).filter((rule) => rule.id !== id));
     await repo.audit(db, "admin", "delete_learned_rule", "setting", id);
     return c.redirect("/admin/rules");
+  });
+
+  r.post("/test-staff-alert", async (c) => {
+    if (!deps.sendTestStaffAlert) return c.text("not available", 501);
+    const results = await deps.sendTestStaffAlert();
+    await repo.audit(db, "admin", "test_staff_alert", null, null, { ok: results.every((r) => r.ok) });
+    return c.html(
+      page(
+        "Test alert",
+        html`<h1>Test alert to staff WhatsApp</h1>
+          <table>${results.map((r) => html`<tr><td>${r.to}</td><td class="${r.ok ? "ok" : "bad"}">${r.ok ? "sent" : "FAILED"}</td><td>${r.detail}</td></tr>`)}</table>
+          <p><a href="/admin">Back</a></p>`,
+      ),
+    );
   });
 
   r.post("/kb/reload", async (c) => {

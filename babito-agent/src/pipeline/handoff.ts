@@ -101,6 +101,27 @@ export class StaffNotifier implements HandoffNotifier {
     await this.sendEmail(`[BABITO] System alert: ${kind}`, `${truncate(message, 1000)}${this.opts.adminBaseUrl ? `\n\n${this.opts.adminBaseUrl}/admin` : ""}`);
   }
 
+  /** Send the handoff alert to every staff number now and report what happened per number (for the dashboard's test button). */
+  async sendTest(): Promise<{ to: string; ok: boolean; detail: string }[]> {
+    const template = this.opts.handoffTemplate;
+    const out: { to: string; ok: boolean; detail: string }[] = [];
+    for (const to of this.opts.staffNumbers) {
+      try {
+        if (template && this.opts.whatsapp.sendTemplate) {
+          await this.opts.whatsapp.sendTemplate(to, template.name, template.language, ["TEST - Dana +972501234567", "complaint | Order #0000 (test only)", "This is a test alert, no action needed"]);
+          out.push({ to, ok: true, detail: `template ${template.name} (${template.language}) accepted by WhatsApp` });
+        } else {
+          await this.opts.whatsapp.sendText(to, "BABITO test alert: no action needed.");
+          out.push({ to, ok: true, detail: "plain text accepted by WhatsApp (no template configured)" });
+        }
+      } catch (err) {
+        out.push({ to, ok: false, detail: String(err instanceof Error ? err.message : err).slice(0, 300) });
+      }
+    }
+    if (this.opts.staffNumbers.length === 0) out.push({ to: "-", ok: false, detail: "STAFF_WHATSAPP_NUMBERS is empty" });
+    return out;
+  }
+
   async notify(n: HandoffNotice) {
     const text =
       `🔔 BABITO handoff (${n.priority})\n` +
