@@ -2,7 +2,7 @@ import type { Db } from "../db/client.js";
 import { repo, type Conversation, type Customer, type MessageRow, type RelayDraft } from "../db/repo.js";
 import { ungroundedPrices } from "../agent/guardrails.js";
 import { businessClock, type KnowledgeService } from "../agent/knowledge.js";
-import { textOf, type LLMProvider } from "../agent/llm.js";
+import { textOf, type ChatMessage, type LLMProvider } from "../agent/llm.js";
 import { businessLayer, CORE_RULES, EMAIL_CHANNEL_RULES, SOCIAL_CHANNEL_RULES, staffHoursText } from "../agent/prompt.js";
 import { displayHandle, isEmailHandle } from "../email/channel.js";
 import type { Logger } from "../logger.js";
@@ -69,9 +69,18 @@ const LANG_LABEL: Record<Lang, { ar: string; en: string }> = {
 
 /** The language the CUSTOMER wrote in (never the staff member's): Arabic or English if they used it, else Hebrew. */
 export function customerReplyLanguage(rows: MessageRow[], conv: Conversation, customer: Customer): Lang {
-  const theirs = rows.filter((r) => r.direction === "inbound" && r.body).slice(-5).map((r) => r.body!);
-  return detectLanguage(theirs.join("\n")) ?? conv.language ?? customer.preferred_language ?? "he";
+  const theirs = rows.filter((r) => r.direction === "inbound" && r.body).map((r) => r.body!.replace(/^\[Subject:[^\]]*\]\s*/i, ""));
+  return (
+    detectLanguage(theirs.at(-1) ?? "") ?? // their latest message decides (like the bot's own replies)
+    detectLanguage(theirs.slice(-5).join("\n")) ??
+    conv.language ??
+    customer.preferred_language ??
+    "he"
+  );
 }
+
+/** WhatsApp and Messenger/Instagram only allow free-form replies within 24h of the customer's last message. */
+const WINDOW_MS = 24 * 3600_000;
 
 export interface RelayDeps {
   db: Db;
@@ -128,7 +137,16 @@ export class StaffRelay {
       alert = await repo.findStaffAlert(db, m.replyToId);
       draft = alert ? null : await repo.findRelayDraftByMessageId(db, m.replyToId);
     } else if (m.text || isVoice(m)) {
-      draft = await repo.latestPendingRelayDraft(db, this.digits(m.from), DRAFT_VALID_MINUTES);
+      const pending = await repo.pendingRelayDrafts(db, this.digits(m.from), DRAFT_VALID_MINUTES);
+      if (pending.length > 1) {
+        // Never guess which customer an un-replied "send" is for.
+        if (await repo.markStaffMessageSeen(db, m.waMessageId)) {
+          const names = pending.map((d) => `• ${`${d.customer_name ?? ""} ${displayHandle(d.customer_handle)}`.trim()}`).join("\n");
+          void this.tell(m.from, `عندك ${pending.length} مسودات معلقة:\n${names}\nاعمل Reply على المسودة المقصودة حتى ما يصير غلط بالزبون.`);
+        }
+        return true;
+      }
+      draft = pending[0] ?? null;
     }
     if (!alert && !draft) {
       // A staff voice note that answers nothing: never treat it as a customer message (the customer
@@ -192,10 +210,11 @@ export class StaffRelay {
     if (draft) {
       // A draft that was already sent, cancelled or replaced.
       if (answer !== "other") {
-        await this.tell(m.from, draft.status === "sent" ? "هالمسودة أُرسلت قبل." : "هالمسودة انلغت أو تم استبدالها بمسودة أحدث.");
+        await this.tell(m.from, draft.status === "sent" ? "هالمسودة أُرسلت قبل." : "هالمسودة انلغت أو تم استبدالها بمسودة أحدث. اعمل Reply على آخر مسودة.");
         return;
       }
-      return this.compose(m.from, draft.conversation_id, instr, null, heard);
+      if (draft.status === "sent") return this.compose(m.from, draft.conversation_id, instr, null, heard);
+      return this.compose(m.from, draft.conversation_id, `${draft.instruction}\n(تعديل من الموظف) ${instr}`, draft.draft, heard);
     }
 
     // A reply to an alert.
@@ -233,12 +252,12 @@ export class StaffRelay {
 
   private async compose(staffTo: string, conversationId: string, instruction: string, previousDraft: string | null, heard: string | null = null) {
     const { db, llm, knowledge } = this.deps;
-    const conv = await repo.getConversation(db, conversationId);
-    const customer = conv ? await repo.getCustomer(db, conv.customer_id) : null;
-    if (!conv || !customer) {
+    const found = await this.resolve(conversationId);
+    if (!found) {
       await this.tell(staffTo, "ما لقيت هالمحادثة (ممكن انمسحت). افتح الداشبورد.");
       return;
     }
+    const { conv, customer } = found;
     const rows = await repo.recentMessages(db, conv.id, this.deps.historyMessages);
     const lang = customerReplyLanguage(rows, conv, customer);
     const settings = await knowledge.settings();
@@ -274,15 +293,17 @@ export class StaffRelay {
 
     let raw: string;
     try {
-      const res = await llm.complete({
-        model: this.deps.model,
-        effort: this.deps.effort,
-        systemStatic,
-        systemDynamic,
-        messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
-        maxTokens: 2000,
-      });
-      raw = textOf(res);
+      const messages: ChatMessage[] = [{ role: "user", content: [{ type: "text", text: userText }] }];
+      const ask = async () => textOf(await llm.complete({ model: this.deps.model, effort: this.deps.effort, systemStatic, systemDynamic, messages, maxTokens: 2000 }));
+      raw = await ask();
+      // Hard check, in code: the customer message must be in the customer's language, never the staff's.
+      const got = detectLanguage(raw.split(/\n\s*NOTE_TO_STAFF:/)[0] ?? "");
+      if (got && got !== lang) {
+        this.deps.log.warn({ event: "relay_wrong_language", conversationId: conv.id, want: lang, got }, "relay draft in the wrong language; retrying");
+        messages.push({ role: "assistant", content: [{ type: "text", text: raw }] });
+        messages.push({ role: "user", content: [{ type: "text", text: `[automatic check] That message is in ${LANG_LABEL[got].en}, but the customer must get it in ${LANG_LABEL[lang].en}. Rewrite the same message in ${LANG_LABEL[lang].en} only.` }] });
+        raw = await ask();
+      }
     } catch (err) {
       this.deps.log.error({ event: "relay_compose_failed", conversationId, err: String(err) }, "relay draft failed");
       await this.tell(staffTo, "ما قدرت أجهز المسودة هلأ (مشكلة مؤقتة). جرب مرة ثانية بعد شوي.");
@@ -297,6 +318,12 @@ export class StaffRelay {
     const notes: string[] = [];
     const note = noteParts.join(" ").trim();
     if (note) notes.push(note);
+    const finalLang = detectLanguage(draftText);
+    if (finalLang && finalLang !== lang) notes.push(`انتبه: المسودة مش ب${LANG_LABEL[lang].ar} (لغة الزبون). لا ترسلها، اعمل Reply واطلب "اكتبها ب${LANG_LABEL[lang].ar}".`);
+    const lastIn = await repo.lastInboundAt(db, customer.id);
+    if (!isEmailHandle(handle) && (!lastIn || Date.now() - lastIn.getTime() > WINDOW_MS)) {
+      notes.push("الزبون ما كتب من أكتر من 24 ساعة، فغالباً الإرسال رح ينرفض (قانون واتساب/ميتا). الأفضل تتواصل معه من رقمك أو بالإيميل.");
+    }
     const ungrounded = ungroundedPrices(draftText, [instruction, transcript]);
     if (ungrounded.length) notes.push(`المسودة فيها سعر (${ungrounded.join("، ")} ₪) ما ذكرته أنت ولا موجود بالمحادثة. راجعه.`);
 
@@ -314,6 +341,19 @@ export class StaffRelay {
     if (wamid) await repo.setRelayDraftMessageId(db, row.id, wamid);
   }
 
+  /**
+   * The chat a draft belongs to. If the alert's chat was closed since and the customer has a newer open
+   * one, use that: it's where their next messages land, so human mode and the history must go there.
+   */
+  private async resolve(conversationId: string): Promise<{ conv: Conversation; customer: Customer } | null> {
+    const { db } = this.deps;
+    const conv = await repo.getConversation(db, conversationId);
+    const customer = conv ? await repo.getCustomer(db, conv.customer_id) : null;
+    if (!conv || !customer) return null;
+    if (conv.status === "open") return { conv, customer };
+    return { conv: (await repo.findOpenConversation(db, customer.id)) ?? conv, customer };
+  }
+
   // --------------------------------------------------------------------- send
 
   private async sendDraft(staffTo: string, draft: RelayDraft) {
@@ -322,12 +362,12 @@ export class StaffRelay {
       await this.tell(staffTo, "هالمسودة تم التعامل معها قبل.");
       return;
     }
-    const conv = await repo.getConversation(db, draft.conversation_id);
-    const customer = conv ? await repo.getCustomer(db, conv.customer_id) : null;
-    if (!conv || !customer) {
+    const found = await this.resolve(draft.conversation_id);
+    if (!found) {
       await this.tell(staffTo, "ما لقيت المحادثة (ممكن انمسحت). ما أُرسل شي.");
       return;
     }
+    const { conv, customer } = found;
     // Staff now own this chat, exactly like a reply typed in the dashboard.
     if (conv.mode !== "human") await repo.setMode(db, conv.id, "human");
     else await repo.touchHumanActivity(db, conv.id);

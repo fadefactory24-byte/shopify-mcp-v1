@@ -1244,6 +1244,110 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect(h.llm.requests).toHaveLength(0);
   });
 
+  // Sets up a customer chat (with the bot's reply) and an alert for it, for multi-customer tests.
+  async function chatWithAlert(phone: string, text: string, alertId: string, name = "Cust") {
+    h.llm.push(say("בודקים."));
+    await h.customerSays(textWebhook(phone, text, { name }));
+    const [conv] = await h.q("select c.id from conversations c join customers cu on cu.id = c.customer_id where cu.wa_id = $1 and c.status = 'open'", [phone]);
+    await repo.recordStaffAlert(h.db, alertId, conv.id, STAFF);
+    return conv.id as string;
+  }
+
+  it("staff write HEBREW, customer wrote ARABIC: the draft is requested in Arabic", async () => {
+    await chatWithAlert("972501110003", "طلبي ما وصل لهلأ", "wamid.alert.ar");
+    h.llm.requests.length = 0;
+    h.llm.push(say("مرحبا، طلبك بالطريق وبيوصل خلال الأيام القريبة."));
+    await staffSays("תגיד לה שההזמנה בדרך", "wamid.alert.ar");
+    expect(h.llm.requests[0]!.systemDynamic).toContain("REPLY LANGUAGE: Arabic");
+    expect(lastToStaff().body).toContain("العربية");
+  });
+
+  it("the customer's LATEST message decides the language (wrote Arabic before, Hebrew now -> Hebrew)", async () => {
+    const phone = "972501110004";
+    h.llm.push(say("أهلا"));
+    await h.customerSays(textWebhook(phone, "مرحبا عندي سؤال عن الطلب", { name: "Lina" }));
+    await chatWithAlert(phone, "בעצם עדיף בעברית, מתי זה מגיע?", "wamid.alert.mix");
+    h.llm.requests.length = 0;
+    h.llm.push(say("היי, ההזמנה בדרך."));
+    await staffSays("قلها الطلب بالطريق", "wamid.alert.mix");
+    expect(h.llm.requests[0]!.systemDynamic).toContain("REPLY LANGUAGE: Hebrew");
+  });
+
+  it("if the model answers in the STAFF's language, code catches it and asks again; the customer's language wins", async () => {
+    await withAlert();
+    h.llm.push(say("مرحبا دانا، رح نبعتلك بديل."), say("היי דנה, נשלח לך מוצר חלופי."));
+    await staffSays("قلها رح نبعتلها بديل", "wamid.alert.1");
+    expect(h.llm.requests).toHaveLength(2);
+    expect(JSON.stringify(h.llm.requests[1]!.messages)).toContain("[automatic check]");
+    expect((await h.q("select draft from relay_drafts"))[0].draft).toBe("היי דנה, נשלח לך מוצר חלופי.");
+    expect(lastToStaff().body).not.toContain("انتبه: المسودة مش");
+  });
+
+  it("if it is STILL in the wrong language after the retry, staff are warned not to send it", async () => {
+    await withAlert();
+    h.llm.push(say("مرحبا دانا، رح نبعتلك بديل."), say("مرحبا دانا، رح نبعتلك بديل."));
+    await staffSays("قلها رح نبعتلها بديل", "wamid.alert.1");
+    expect(lastToStaff().body).toContain("انتبه: المسودة مش بالعبرية");
+  });
+
+  it("two customers with pending drafts: an un-replied 'أرسل' sends NOTHING and asks which one", async () => {
+    const c1 = "972501110005";
+    const c2 = "972501110006";
+    await chatWithAlert(c1, "איפה ההזמנה?", "wamid.alert.c1", "Avi");
+    await chatWithAlert(c2, "המוצר שבור", "wamid.alert.c2", "Noa");
+    h.whatsapp.sent.length = 0; // drop the bot's own setup replies
+    h.llm.push(say("טיוטה לאבי"), say("טיוטה לנועה"));
+    await staffSays("طمنه", "wamid.alert.c1");
+    await staffSays("قلها رح نبدله", "wamid.alert.c2");
+    await staffSays("أرسل");
+    expect(h.whatsapp.sent.filter((s) => s.to === c1 || s.to === c2)).toHaveLength(0);
+    expect(lastToStaff().body).toContain("مسودات معلقة");
+    expect(lastToStaff().body).toContain("Avi");
+    expect(lastToStaff().body).toContain("Noa");
+
+    // Replying on a specific draft goes to exactly that customer.
+    const previews = h.whatsapp.sent.filter((s) => s.to === STAFF && s.body.includes("📝"));
+    const noaPreview = previews.find((p) => p.body.includes("טיוטה לנועה"))!;
+    await staffSays("أرسل", noaPreview.id);
+    expect(h.whatsapp.sent.filter((s) => s.to === c2).map((s) => s.body)).toEqual(["טיוטה לנועה"]);
+    expect(h.whatsapp.sent.filter((s) => s.to === c1)).toHaveLength(0);
+  });
+
+  it("customer silent for over 24h (WhatsApp would refuse a free-form message): the preview warns", async () => {
+    const convId = await withAlert();
+    await h.q("update messages set created_at = now() - interval '25 hours' where conversation_id = $1 and direction = 'inbound'", [convId]);
+    h.llm.push(say("שלום דנה"));
+    await staffSays("طمنها", "wamid.alert.1");
+    expect(lastToStaff().body).toContain("أكتر من 24 ساعة");
+  });
+
+  it("an alert for a chat that was closed since: the draft and the send follow the customer's current open chat", async () => {
+    const oldConv = await withAlert();
+    await h.q("update conversations set status = 'closed' where id = $1", [oldConv]);
+    h.llm.push(say("שוב שלום"));
+    await h.customerSays(textWebhook(HEB_CUSTOMER, "עוד שאלה", { name: "דנה", id: "wamid.newchat" }));
+    const [newConv] = await h.q("select id from conversations where status = 'open'");
+    h.llm.requests.length = 0;
+    h.llm.push(say("היי דנה, בודקים."));
+    await staffSays("طمنها", "wamid.alert.1");
+    expect((await h.q("select conversation_id from relay_drafts"))[0].conversation_id).toBe(newConv.id);
+    expect(JSON.stringify(h.llm.requests[0]!.messages)).toContain("עוד שאלה");
+    await staffSays("أرسل", lastToStaff().id);
+    expect((await h.q("select mode from conversations where id = $1", [newConv.id]))[0].mode).toBe("human");
+  });
+
+  it("an edit on a replaced draft still continues from that draft (keeps the original instruction)", async () => {
+    await withAlert();
+    h.llm.push(say("טיוטה 1"), say("טיוטה 2"), say("טיוטה 3"));
+    await staffSays("طمنها انه بنبعتلها بديل", "wamid.alert.1");
+    const first = lastToStaff();
+    await staffSays("أقصر", first.id);
+    await staffSays("ضيف انه بنعتذر", first.id); // first is superseded now
+    const req = JSON.stringify(h.llm.requests[2]!.messages);
+    expect(req).toContain("طمنها انه بنبعتلها بديل");
+    expect(req).toContain("ضيف انه بنعتذر");
+  });
+
   it("a NOTE_TO_STAFF line is shown to staff and kept out of the customer message", async () => {
     await withAlert();
     h.llm.push(say("שלום דנה, נחזור אליך.\nNOTE_TO_STAFF: ما حددت موعد، فما ذكرت تاريخ."));

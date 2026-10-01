@@ -579,13 +579,27 @@ export const repo = {
     return rows[0] ?? null;
   },
 
-  async latestPendingRelayDraft(db: Db, staffNumber: string, withinMinutes: number): Promise<RelayDraft | null> {
-    const { rows } = await db.query<RelayDraft>(
-      `select * from relay_drafts where staff_number = $1 and status = 'pending' and created_at > now() - make_interval(mins => $2)
-       order by created_at desc limit 1`,
+  /** Pending drafts of this staff member from the last `withinMinutes`, newest first, with the customer's name for disambiguation. */
+  async pendingRelayDrafts(db: Db, staffNumber: string, withinMinutes: number): Promise<(RelayDraft & { customer_name: string | null; customer_handle: string })[]> {
+    const { rows } = await db.query<RelayDraft & { customer_name: string | null; customer_handle: string }>(
+      `select d.*, cu.display_name as customer_name, cu.wa_id as customer_handle
+       from relay_drafts d join conversations c on c.id = d.conversation_id join customers cu on cu.id = c.customer_id
+       where d.staff_number = $1 and d.status = 'pending' and d.created_at > now() - make_interval(mins => $2)
+       order by d.created_at desc`,
       [staffNumber, withinMinutes],
     );
+    return rows;
+  },
+
+  /** The open conversation of this customer, if any (an alert may point at a chat that was closed since). */
+  async findOpenConversation(db: Db, customerId: string): Promise<Conversation | null> {
+    const { rows } = await db.query<Conversation>(`select * from conversations where customer_id = $1 and status = 'open'`, [customerId]);
     return rows[0] ?? null;
+  },
+
+  async lastInboundAt(db: Db, customerId: string): Promise<Date | null> {
+    const { rows } = await db.query<{ at: string | null }>(`select max(created_at) as at from messages where customer_id = $1 and direction = 'inbound'`, [customerId]);
+    return rows[0]?.at ? new Date(rows[0].at) : null;
   },
 
   /** Moves a pending draft to its final status. Returns false if it was no longer pending (already sent/cancelled). */
