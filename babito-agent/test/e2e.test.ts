@@ -1203,6 +1203,40 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect(lastToStaff().body).toContain("199.9");
   });
 
+  const staffVoice = async (replyTo?: string) => {
+    const p = mediaWebhook(STAFF, "audio") as any;
+    const m = p.entry[0].changes[0].value.messages[0];
+    m.id = `wamid.voice.${Math.random().toString(36).slice(2)}`;
+    if (replyTo) m.context = { id: replyTo };
+    await h.customerSays(p);
+  };
+
+  it("a voice note replying to an alert is transcribed, shown back as heard, and drafted in the customer's language", async () => {
+    await withAlert();
+    h.transcriber.next = "قلها رح نبعتلها بديل";
+    h.llm.push(say("היי דנה, נשלח לך מוצר חלופי."));
+    await staffVoice("wamid.alert.1");
+    expect(h.whatsapp.downloaded).toEqual(["MEDIA1"]);
+    expect(h.llm.requests[0]!.systemDynamic).toContain("REPLY LANGUAGE: Hebrew");
+    expect(JSON.stringify(h.llm.requests[0]!.messages)).toContain("[voice note, automatic transcript");
+    const preview = lastToStaff().body;
+    expect(preview).toContain("🎤 سمعتك: «قلها رح نبعتلها بديل»");
+    expect(preview).toContain("היי דנה, נשלח לך מוצר חלופי.");
+
+    // A spoken "أرسل" (no swipe-reply needed) approves it.
+    h.transcriber.next = "أرسل.";
+    await staffVoice();
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER).map((s) => s.body)).toEqual(["היי דנה, נשלח לך מוצר חלופי."]);
+  });
+
+  it("a voice note that can't be transcribed is reported to staff, nothing is drafted", async () => {
+    await withAlert();
+    h.transcriber.next = "";
+    await staffVoice("wamid.alert.1");
+    expect(lastToStaff().body).toContain("ما قدرت أفهم الرسالة الصوتية");
+    expect(h.llm.requests).toHaveLength(0);
+  });
+
   it("a NOTE_TO_STAFF line is shown to staff and kept out of the customer message", async () => {
     await withAlert();
     h.llm.push(say("שלום דנה, נחזור אליך.\nNOTE_TO_STAFF: ما حددت موعد، فما ذكرت تاريخ."));

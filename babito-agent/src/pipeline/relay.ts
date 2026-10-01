@@ -10,6 +10,7 @@ import { socialPlatformOf } from "../social/webhook.js";
 import { detectLanguage, toWhatsAppText, truncate, type Lang } from "../util/text.js";
 import type { WhatsAppSender } from "../whatsapp/client.js";
 import type { InboundMessage } from "../whatsapp/webhook.js";
+import type { Transcriber } from "../util/transcribe.js";
 
 /**
  * Staff relay. A team member answers a handoff alert on WhatsApp in plain (usually spoken Arabic)
@@ -86,7 +87,11 @@ export interface RelayDeps {
   effort: "low" | "medium" | "high" | "xhigh" | "max";
   historyMessages: number;
   adminBaseUrl?: string;
+  /** Speech-to-text for voice notes; without it staff are asked to write. */
+  transcriber?: Transcriber;
 }
+
+const isVoice = (m: InboundMessage) => m.type === "audio" && Boolean(m.media?.id);
 
 export class StaffRelay {
   private inflight = new Set<Promise<void>>();
@@ -122,7 +127,7 @@ export class StaffRelay {
     if (m.replyToId) {
       alert = await repo.findStaffAlert(db, m.replyToId);
       draft = alert ? null : await repo.findRelayDraftByMessageId(db, m.replyToId);
-    } else if (m.text) {
+    } else if (m.text || isVoice(m)) {
       draft = await repo.latestPendingRelayDraft(db, this.digits(m.from), DRAFT_VALID_MINUTES);
     }
     if (!alert && !draft) return false;
@@ -153,12 +158,20 @@ export class StaffRelay {
       this.lastPurge = Date.now();
       void repo.purgeOldRelayRows(db, KEEP_DAYS).catch(() => {});
     }
-    const text = m.text?.trim() ?? "";
+    let text = m.text?.trim() ?? "";
+    let heard: string | null = null;
+    if (!text && isVoice(m)) {
+      heard = await this.transcribe(m);
+      if (heard === null) return;
+      text = heard;
+    }
     if (!text) {
-      await this.tell(m.from, "اكتب لي رسالة نصية (الصوت والصور ما بقدر أقراها هون).");
+      await this.tell(m.from, "اكتب لي رسالة نصية أو صوتية (الصور ما بقدر أقراها هون).");
       return;
     }
     const answer = classifyAnswer(text);
+    // The model is told a voice instruction is a machine transcript, so it reads past small errors.
+    const instr = heard ? `[voice note, automatic transcript, may contain small errors] ${text}` : text;
 
     if (draft && draft.status === "pending") {
       if (answer === "confirm") return this.sendDraft(m.from, draft);
@@ -166,7 +179,7 @@ export class StaffRelay {
         if (await repo.decideRelayDraft(db, draft.id, "cancelled")) await this.tell(m.from, "تم الإلغاء. ما أُرسل شي للزبون.");
         return;
       }
-      return this.compose(m.from, draft.conversation_id, `${draft.instruction}\n(تعديل من الموظف) ${text}`, draft.draft);
+      return this.compose(m.from, draft.conversation_id, `${draft.instruction}\n(تعديل من الموظف) ${instr}`, draft.draft, heard);
     }
     if (draft) {
       // A draft that was already sent, cancelled or replaced.
@@ -174,7 +187,7 @@ export class StaffRelay {
         await this.tell(m.from, draft.status === "sent" ? "هالمسودة أُرسلت قبل." : "هالمسودة انلغت أو تم استبدالها بمسودة أحدث.");
         return;
       }
-      return this.compose(m.from, draft.conversation_id, text, null);
+      return this.compose(m.from, draft.conversation_id, instr, null, heard);
     }
 
     // A reply to an alert.
@@ -186,12 +199,31 @@ export class StaffRelay {
       await this.tell(m.from, "ما في مسودة معلقة لهالمحادثة. اكتب لي شو بدك أحكي للزبون وبجهز لك رد.");
       return;
     }
-    return this.compose(m.from, alert!.conversation_id, text, null);
+    return this.compose(m.from, alert!.conversation_id, instr, null, heard);
+  }
+
+  /** Voice note -> text. Returns null (after telling staff why) when it can't. */
+  private async transcribe(m: InboundMessage): Promise<string | null> {
+    const { transcriber, whatsapp } = this.deps;
+    if (!transcriber || !whatsapp.downloadMedia) {
+      await this.tell(m.from, "الرسائل الصوتية مش مفعّلة لسا. اكتبها نص من فضلك.");
+      return null;
+    }
+    try {
+      const file = await whatsapp.downloadMedia(m.media!.id!);
+      const text = await transcriber.transcribe(file.data, m.media?.mime ?? file.contentType);
+      if (!text) throw new Error("empty transcript");
+      return text;
+    } catch (err) {
+      this.deps.log.warn({ event: "relay_transcribe_failed", err: String(err) }, "could not transcribe a staff voice note");
+      await this.tell(m.from, "ما قدرت أفهم الرسالة الصوتية. جرب مرة ثانية أو اكتبها.");
+      return null;
+    }
   }
 
   // ------------------------------------------------------------------ compose
 
-  private async compose(staffTo: string, conversationId: string, instruction: string, previousDraft: string | null) {
+  private async compose(staffTo: string, conversationId: string, instruction: string, previousDraft: string | null, heard: string | null = null) {
     const { db, llm, knowledge } = this.deps;
     const conv = await repo.getConversation(db, conversationId);
     const customer = conv ? await repo.getCustomer(db, conv.customer_id) : null;
@@ -265,6 +297,7 @@ export class StaffRelay {
 
     const who = `${customer.display_name ?? ""} ${displayHandle(handle)}`.trim();
     const preview =
+      (heard ? `🎤 سمعتك: «${truncate(heard, 300)}»\n\n` : "") +
       `📝 مسودة الرد لـ ${who} (${channelLabel(handle)}، اللغة: ${LANG_LABEL[lang].ar})\n\n` +
       `${draftText}\n\n──────\n` +
       (notes.length ? `⚠️ ${notes.join("\n⚠️ ")}\n\n` : "") +

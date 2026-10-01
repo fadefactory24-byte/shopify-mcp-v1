@@ -37,7 +37,9 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   const notifier = new FakeNotifier();
   const tracking = new FakeTracking();
   const mail = new FakeMail();
-  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking, mail, social });
+  /** Fake speech-to-text: returns whatever the test sets. */
+  const transcriber = { next: "", calls: 0, async transcribe() { this.calls++; return this.next; } };
+  const services = buildServices(cfg, db, log, { llm, shopify, whatsapp, notifier, tracking, mail, social, transcriber });
   /** Fake Graph API for the admin's Embedded Signup calls; tests replace it. */
   let metaFetch: typeof fetch = async () => new Response(JSON.stringify({ error: { message: "no fake set" } }), { status: 500 });
   const app = createApp({
@@ -89,7 +91,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     metaFetch = f;
   };
 
-  return { cfg, db, app, llm, shopify, whatsapp, social, notifier, tracking, services, post, customerSays, q, setMetaFetch, mail, email: services.email, processor: services.processor };
+  return { transcriber, cfg, db, app, llm, shopify, whatsapp, social, notifier, tracking, services, post, customerSays, q, setMetaFetch, mail, email: services.email, processor: services.processor };
 }
 
 export type Harness = Awaited<ReturnType<typeof createHarness>>;

@@ -84,6 +84,9 @@ const ConfigSchema = z.object({
    */
   STAFF_HANDOFF_TEMPLATE: z.string().optional().default(""),
   STAFF_HANDOFF_TEMPLATE_LANG: z.string().default("en"),
+  /** Optional Groq API key: staff can answer alerts with WhatsApp voice notes (speech-to-text, free tier). */
+  GROQ_API_KEY: z.string().optional().default(""),
+  TRANSCRIBE_MODEL: z.string().default("whisper-large-v3"),
 
   // Email channel: the support mailbox (Microsoft 365) through Microsoft Graph, delegated access.
   EMAIL_CHANNEL_ENABLED: bool(false),
@@ -144,6 +147,7 @@ export function redactedConfigSummary(cfg: Config) {
     emailChannel: cfg.EMAIL_CHANNEL_ENABLED && Boolean(cfg.MS_CLIENT_ID),
     socialChannel: cfg.SOCIAL_CHANNEL_ENABLED && Boolean(cfg.META_PAGE_ACCESS_TOKEN),
     liveTracking: Boolean(cfg.SEVENTEENTRACK_API_KEY),
+    staffVoice: Boolean(cfg.GROQ_API_KEY),
     adminEnabled: Boolean(cfg.ADMIN_PASSWORD),
   };
 }

@@ -222,3 +222,29 @@ describe("17TRACK client", () => {
     expect(await t.status("A2")).toBeNull();
   });
 });
+
+describe("GroqTranscriber", () => {
+  it("posts the voice note as multipart to Groq's transcription endpoint and returns the text", async () => {
+    const { GroqTranscriber } = await import("../src/util/transcribe.js");
+    let seen: { url: string; auth: string | null; model: unknown; file: unknown } | null = null;
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      const form = init.body as FormData;
+      seen = { url, auth: new Headers(init.headers).get("authorization"), model: form.get("model"), file: form.get("file") };
+      return new Response(JSON.stringify({ text: " قلها رح نبعتلها بديل " }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const t = new GroqTranscriber({ apiKey: "gsk_test", model: "whisper-large-v3", fetchImpl });
+    const text = await t.transcribe(new Uint8Array([1, 2, 3]).buffer as ArrayBuffer, "audio/ogg; codecs=opus");
+    expect(text).toBe("قلها رح نبعتلها بديل");
+    expect(seen!.url).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
+    expect(seen!.auth).toBe("Bearer gsk_test");
+    expect(seen!.model).toBe("whisper-large-v3");
+    expect((seen!.file as File).name).toBe("voice.ogg");
+  });
+
+  it("throws on an API error (the relay then asks staff to retry or write)", async () => {
+    const { GroqTranscriber } = await import("../src/util/transcribe.js");
+    const fetchImpl = (async () => new Response("rate limited", { status: 429 })) as unknown as typeof fetch;
+    const t = new GroqTranscriber({ apiKey: "k", model: "whisper-large-v3", fetchImpl });
+    await expect(t.transcribe(new ArrayBuffer(1), "audio/ogg")).rejects.toThrow("429");
+  });
+});

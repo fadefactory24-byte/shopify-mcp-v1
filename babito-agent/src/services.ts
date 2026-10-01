@@ -9,6 +9,7 @@ import { dbTokenStore, GraphMailClient, type MailApi } from "./email/graph.js";
 import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
 import { StaffRelay } from "./pipeline/relay.js";
+import { GroqTranscriber, type Transcriber } from "./util/transcribe.js";
 import { repo } from "./db/repo.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
@@ -38,7 +39,7 @@ export function buildServices(
   cfg: Config,
   db: Db,
   log: Logger,
-  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier" | "social">> & { tracking?: TrackingService; mail?: MailApi } = {},
+  overrides: Partial<Pick<Services, "llm" | "shopify" | "whatsapp" | "notifier" | "social">> & { tracking?: TrackingService; mail?: MailApi; transcriber?: Transcriber } = {},
 ): Services {
   const tracking = overrides.tracking ?? (cfg.SEVENTEENTRACK_API_KEY ? new SeventeenTrack({ apiKey: cfg.SEVENTEENTRACK_API_KEY }) : undefined);
   const whatsapp =
@@ -135,6 +136,7 @@ export function buildServices(
     effort: cfg.AI_MODEL_MAIN_EFFORT,
     historyMessages: cfg.AI_HISTORY_MESSAGES,
     adminBaseUrl: publicBaseUrl(cfg),
+    transcriber: overrides.transcriber ?? (cfg.GROQ_API_KEY ? new GroqTranscriber({ apiKey: cfg.GROQ_API_KEY, model: cfg.TRANSCRIBE_MODEL }) : undefined),
   });
   return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, relay, email, social };
 }
