@@ -91,6 +91,8 @@ export interface InboundMessage {
   /** `id` (WhatsApp, fetched on demand) or `url` (Messenger/Instagram/email, already a link). */
   media: { kind: string; id?: string; mime?: string; url?: string } | null;
   phoneNumberId: string | null;
+  /** WhatsApp "reply" (swipe) target: the id of the message this one answers, if any. */
+  replyToId?: string | null;
 }
 
 export interface StatusUpdate {
@@ -210,5 +212,6 @@ function toInbound(m: z.infer<typeof MessageSchema>, profileName: string | null,
     text: text?.trim() ? text : null,
     media,
     phoneNumberId,
+    replyToId: m.context?.id ?? null,
   };
 }

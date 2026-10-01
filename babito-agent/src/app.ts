@@ -12,12 +12,15 @@ import type { WhatsAppSender } from "./whatsapp/client.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "./whatsapp/webhook.js";
 import { MalformedSocialWebhookError, parseSocialWebhook } from "./social/webhook.js";
 import { runMigrations } from "./db/migrate.js";
+import type { StaffRelay } from "./pipeline/relay.js";
 
 export interface AppDeps {
   db: Db;
   log: Logger;
   processor: MessageProcessor;
   knowledge: KnowledgeService;
+  /** Staff replies to alerts (answer in plain words, approve a drafted customer message). */
+  relay?: StaffRelay;
   /** Dashboard test button: sends the staff handoff alert now and reports per number. */
   sendTestStaffAlert?: () => Promise<{ to: string; ok: boolean; detail: string }[]>;
   /** Used by the dashboard to show customer photos/videos/documents. */
@@ -132,9 +135,18 @@ export function createApp(deps: AppDeps) {
     }
     if (parsed.skipped) log.warn({ event: "webhook_items_skipped", count: parsed.skipped }, "some webhook items could not be parsed");
 
+    // Messages from a staff number that answer an alert or a draft belong to the relay, not to the customer pipeline.
+    let customerMessages = parsed.messages;
+    if (deps.relay) {
+      customerMessages = [];
+      for (const m of parsed.messages) {
+        if (!(await deps.relay.accept(m))) customerMessages.push(m);
+      }
+    }
+
     // Persist synchronously (durable before we ack), process asynchronously.
     // If this throws, we return 500 and Meta retries — dedupe makes that safe.
-    const { conversationIds } = await deps.processor.ingest(parsed.messages);
+    const { conversationIds } = await deps.processor.ingest(customerMessages);
     await deps.processor.applyStatuses(parsed.statuses);
     if (parsed.echoes.length) await deps.processor.applyEchoes(parsed.echoes);
     for (const id of conversationIds) deps.processor.schedule(id);

@@ -62,6 +62,18 @@ export interface KbArticle {
   priority: number;
 }
 
+export interface RelayDraft {
+  id: string;
+  conversation_id: string;
+  staff_number: string;
+  instruction: string;
+  draft: string;
+  language: string | null;
+  status: "pending" | "sent" | "cancelled" | "superseded";
+  draft_wa_message_id: string | null;
+  created_at: string;
+}
+
 export type HandoffReason =
   | "customer_request"
   | "complaint"
@@ -523,6 +535,75 @@ export const repo = {
       `insert into settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value`,
       [key, JSON.stringify(value)],
     );
+  },
+
+  // -------------------------------------------------------------- staff relay
+  async recordStaffAlert(db: Db, waMessageId: string, conversationId: string | null, staffNumber: string) {
+    await db.query(`insert into staff_alerts (wa_message_id, conversation_id, staff_number) values ($1, $2, $3) on conflict do nothing`, [
+      waMessageId,
+      conversationId,
+      staffNumber,
+    ]);
+  },
+
+  async findStaffAlert(db: Db, waMessageId: string): Promise<{ conversation_id: string | null } | null> {
+    const { rows } = await db.query<{ conversation_id: string | null }>(`select conversation_id from staff_alerts where wa_message_id = $1`, [waMessageId]);
+    return rows[0] ?? null;
+  },
+
+  /** False when this staff message was already handled (webhook redelivery). */
+  async markStaffMessageSeen(db: Db, waMessageId: string): Promise<boolean> {
+    const { rows } = await db.query(`insert into staff_messages_seen (wa_message_id) values ($1) on conflict do nothing returning wa_message_id`, [waMessageId]);
+    return rows.length > 0;
+  },
+
+  async purgeOldRelayRows(db: Db, days: number) {
+    await db.query(`delete from staff_messages_seen where created_at < now() - make_interval(days => $1)`, [days]);
+    await db.query(`delete from staff_alerts where created_at < now() - make_interval(days => $1)`, [days]);
+  },
+
+  async insertRelayDraft(db: Db, d: { conversationId: string; staffNumber: string; instruction: string; draft: string; language: string | null }): Promise<RelayDraft> {
+    const { rows } = await db.query<RelayDraft>(
+      `insert into relay_drafts (conversation_id, staff_number, instruction, draft, language) values ($1, $2, $3, $4, $5) returning *`,
+      [d.conversationId, d.staffNumber, d.instruction, d.draft, d.language],
+    );
+    return rows[0]!;
+  },
+
+  async setRelayDraftMessageId(db: Db, id: string, waMessageId: string) {
+    await db.query(`update relay_drafts set draft_wa_message_id = $2 where id = $1`, [id, waMessageId]);
+  },
+
+  async findRelayDraftByMessageId(db: Db, waMessageId: string): Promise<RelayDraft | null> {
+    const { rows } = await db.query<RelayDraft>(`select * from relay_drafts where draft_wa_message_id = $1`, [waMessageId]);
+    return rows[0] ?? null;
+  },
+
+  async latestPendingRelayDraft(db: Db, staffNumber: string, withinMinutes: number): Promise<RelayDraft | null> {
+    const { rows } = await db.query<RelayDraft>(
+      `select * from relay_drafts where staff_number = $1 and status = 'pending' and created_at > now() - make_interval(mins => $2)
+       order by created_at desc limit 1`,
+      [staffNumber, withinMinutes],
+    );
+    return rows[0] ?? null;
+  },
+
+  /** Moves a pending draft to its final status. Returns false if it was no longer pending (already sent/cancelled). */
+  async decideRelayDraft(db: Db, id: string, status: "sent" | "cancelled" | "superseded"): Promise<boolean> {
+    const { rows } = await db.query(`update relay_drafts set status = $2, decided_at = now() where id = $1 and status = 'pending' returning id`, [id, status]);
+    return rows.length > 0;
+  },
+
+  async supersedePendingRelayDrafts(db: Db, conversationId: string, staffNumber: string) {
+    await db.query(`update relay_drafts set status = 'superseded', decided_at = now() where conversation_id = $1 and staff_number = $2 and status = 'pending'`, [
+      conversationId,
+      staffNumber,
+    ]);
+  },
+
+  async getMessage(db: Db, id: string): Promise<MessageRow | null> {
+    const { rows } = await db.query<MessageRow>(`select * from messages where id = $1`, [id]);
+    return rows[0] ?? null;
   },
 
   async audit(db: Db, actor: string, action: string, entity: string | null, entityId: string | null, details: Record<string, unknown> = {}) {

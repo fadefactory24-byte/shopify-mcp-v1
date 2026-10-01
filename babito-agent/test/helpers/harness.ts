@@ -25,6 +25,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     META_PAGE_ID: "PAGE_ID",
     META_INSTAGRAM_ID: "IG_ID",
     META_PAGE_ACCESS_TOKEN: "test-page-token",
+    STAFF_WHATSAPP_NUMBERS: "972507406322",
     ...envOverrides,
   });
   const db = await createTestDb();
@@ -44,6 +45,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     log,
     processor: services.processor,
     knowledge: services.knowledge,
+    relay: services.relay,
     media: services.whatsapp,
     config: {
       verifyToken: cfg.WHATSAPP_VERIFY_TOKEN,
@@ -74,6 +76,7 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
   /** Send a customer message through the webhook and wait for processing to finish. */
   async function customerSays(payload: unknown) {
     const res = await post(payload);
+    await services.relay.drain();
     await services.processor.drain();
     return res;
   }

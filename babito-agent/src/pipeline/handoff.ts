@@ -73,6 +73,8 @@ export class StaffNotifier implements HandoffNotifier {
       flagEmail?: (handle: string) => Promise<void>;
       /** Approved WhatsApp template for handoff alerts: body params are [customer, reason, summary]. */
       handoffTemplate?: { name: string; language: string };
+      /** Called with the WhatsApp message id of every alert sent to a staff number, so a reply to it can be tied back to its chat. */
+      onAlertSent?: (waMessageId: string, staffNumber: string, conversationId: string | null) => Promise<void>;
       log: Logger;
       now?: () => number;
     },
@@ -111,6 +113,15 @@ export class StaffNotifier implements HandoffNotifier {
     await this.sendEmail(`[BABITO] System alert: ${kind}`, `${truncate(message, 1000)}${this.opts.adminBaseUrl ? `\n\n${this.opts.adminBaseUrl}/admin` : ""}`);
   }
 
+  private async remember(r: { waMessageId: string }, staffNumber: string, conversationId: string | null) {
+    try {
+      await this.opts.onAlertSent?.(r.waMessageId, staffNumber, conversationId);
+    } catch (err) {
+      this.opts.log.warn({ event: "staff_alert_record_failed", err: String(err) }, "could not record the alert for replies");
+    }
+    return r;
+  }
+
   /** Send the handoff alert to every staff number now and report what happened per number (for the dashboard's test button). */
   async sendTest(): Promise<{ to: string; ok: boolean; detail: string }[]> {
     const template = this.opts.handoffTemplate;
@@ -118,10 +129,14 @@ export class StaffNotifier implements HandoffNotifier {
     for (const to of this.opts.staffNumbers) {
       try {
         if (template && this.opts.whatsapp.sendTemplate) {
-          await this.opts.whatsapp.sendTemplate(to, template.name, template.language, ["TEST - Dana +972501234567", "complaint | Order #0000 (test only)", "This is a test alert, no action needed"]);
+          await this.remember(
+            await this.opts.whatsapp.sendTemplate(to, template.name, template.language, ["TEST - Dana +972501234567", "complaint | Order #0000 (test only)", "This is a test alert, no action needed"]),
+            to,
+            null,
+          );
           out.push({ to, ok: true, detail: `template ${template.name} (${template.language}) accepted by WhatsApp` });
         } else {
-          await this.opts.whatsapp.sendText(to, "BABITO test alert: no action needed.");
+          await this.remember(await this.opts.whatsapp.sendText(to, "BABITO test alert: no action needed."), to, null);
           out.push({ to, ok: true, detail: "plain text accepted by WhatsApp (no template configured)" });
         }
       } catch (err) {
@@ -163,9 +178,11 @@ export class StaffNotifier implements HandoffNotifier {
       const reason = oneLine(`${n.reason}${n.orderName ? ` | Order ${n.orderName}` : ""}${n.changeType ? ` | ${n.changeType}` : ""}`);
       const summary = oneLine(n.summary ?? "(no summary)");
       const sendTemplate = this.opts.whatsapp.sendTemplate;
-      for (const num of this.opts.staffNumbers) tasks.push(sendTemplate(num, template.name, template.language, [customer, reason, summary]));
+      for (const num of this.opts.staffNumbers) {
+        tasks.push(sendTemplate.call(this.opts.whatsapp, num, template.name, template.language, [customer, reason, summary]).then((r) => this.remember(r, num, n.conversationId)));
+      }
     } else {
-      for (const num of this.opts.staffNumbers) tasks.push(this.opts.whatsapp.sendText(num, text));
+      for (const num of this.opts.staffNumbers) tasks.push(this.opts.whatsapp.sendText(num, text).then((r) => this.remember(r, num, n.conversationId)));
     }
     const results = await Promise.allSettled(tasks);
     for (const r of results) if (r.status === "rejected") this.opts.log.warn({ err: String(r.reason), handoffId: n.handoffId }, "staff notification failed");

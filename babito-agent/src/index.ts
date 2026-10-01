@@ -18,6 +18,7 @@ const app = createApp({
   log: logger,
   processor: services.processor,
   knowledge: services.knowledge,
+  relay: services.relay,
   media: services.whatsapp,
   sendTestStaffAlert: staffNotifier ? () => staffNotifier.sendTest() : undefined,
   config: {
@@ -71,6 +72,7 @@ async function shutdown(signal: string) {
   // messages go back to 'received' and their leases are released, so the next instance's sweeper
   // answers them within seconds instead of after lease expiry.
   await services.processor.drain(90_000);
+  await services.relay.drain();
   services.processor.stopTimers();
   await services.processor.releaseLeases();
   await db.close();

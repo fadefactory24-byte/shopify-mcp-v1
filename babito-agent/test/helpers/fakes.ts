@@ -228,7 +228,7 @@ export function lastToolResults(req: LLMRequest): { content: any; isError?: bool
 // ------------------------------------------------------------------ webhook payloads
 
 let seq = 0;
-export function textWebhook(from: string, body: string, opts: { id?: string; name?: string; phoneNumberId?: string } = {}) {
+export function textWebhook(from: string, body: string, opts: { id?: string; name?: string; phoneNumberId?: string; replyTo?: string } = {}) {
   return {
     object: "whatsapp_business_account",
     entry: [
@@ -241,7 +241,7 @@ export function textWebhook(from: string, body: string, opts: { id?: string; nam
               messaging_product: "whatsapp",
               metadata: { display_phone_number: "972000000000", phone_number_id: opts.phoneNumberId ?? "PNID" },
               contacts: [{ wa_id: from, profile: { name: opts.name ?? "Dana" } }],
-              messages: [{ from, id: opts.id ?? `wamid.in.${++seq}.${Date.now()}`, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body } }],
+              messages: [{ from, id: opts.id ?? `wamid.in.${++seq}.${Date.now()}`, timestamp: String(Math.floor(Date.now() / 1000)), type: "text", text: { body }, ...(opts.replyTo ? { context: { id: opts.replyTo } } : {}) }],
             },
           },
         ],

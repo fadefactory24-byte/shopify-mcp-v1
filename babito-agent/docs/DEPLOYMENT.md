@@ -126,6 +126,15 @@ While the template is pending approval (or `STAFF_HANDOFF_TEMPLATE`/`STAFF_WHATS
 
 When the bot gets something wrong, open the chat in `/admin` and click "The bot got something wrong here? Teach it a lesson" (or go to `/admin/rules`), and write in plain words what it should do instead. Lessons are stored in the database (`settings.learned_rules`, never in the code), added to every prompt within a minute, override the other rules if they conflict, and can be switched off or deleted at any time.
 
+## 5f. Answer the bot, it writes to the customer
+
+A staff member (a number in `STAFF_WHATSAPP_NUMBERS`) replies on WhatsApp to a handoff alert, in plain words and in any language (e.g. spoken Arabic: "tell her the supplier will resend it"). The bot writes a polished customer message from it, **always in the customer's language** (Hebrew by default, Arabic or English if that's what the customer wrote), following the tone rules and lessons, and sends the draft back to the staff member. Nothing reaches the customer until the staff member replies "أرسل" (or "send"/"ok") to the draft; replying with a change revises it; "إلغاء" cancels. After sending, the chat goes to human mode like any staff reply. It works on every channel the bot sees (WhatsApp, email, Messenger, Instagram) and reports a failed send (e.g. WhatsApp's 24h window) back to the staff member.
+
+- Needs migration `20261001000001_staff_relay.sql` (run `/cron/migrate`).
+- Replying to an alert only works for alerts sent after this was deployed (alert ids are stored in `staff_alerts`). To verify the link end to end, press "Send a test alert" in `/admin` and reply to it: you should get a confirmation.
+- A message from a staff number that is not a reply to an alert/draft still goes through the normal customer pipeline (so staff can test the bot).
+- Messages the staff number sends to the business number are only handled here; they are not stored as customer chats.
+
 ## 6. Scheduled jobs
 
 None to set up. The server runs the sweeper every 15s and the retention purge every `MAINTENANCE_INTERVAL_HOURS` (default 24). If you prefer an external scheduler, set it to `0` and call:

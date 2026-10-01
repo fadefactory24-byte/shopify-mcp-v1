@@ -328,6 +328,29 @@ describe("staff email alerts", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]!.to).toBe("972507406322");
   });
+
+  it("every alert sent to staff is recorded with its message id and chat, so a reply can be tied back (also the test alert, with no chat)", async () => {
+    const recorded: [string, string, string | null][] = [];
+    const wa = {
+      sendText: async () => ({ waMessageId: "wamid.plain" }),
+      sendTemplate: async () => ({ waMessageId: "wamid.tpl.1" }),
+    } as any;
+    const n = new StaffNotifier({
+      webhookUrl: "",
+      staffNumbers: ["972507406322"],
+      whatsapp: wa,
+      email: null,
+      handoffTemplate: { name: "t", language: "en" },
+      onAlertSent: async (wamid, to, conv) => void recorded.push([wamid, to, conv]),
+      log,
+    });
+    await n.notify({ handoffId: "h", conversationId: "conv-1", customerWaId: "972501234567", customerName: "Dana", reason: "complaint", priority: "normal", summary: "x" });
+    await n.sendTest();
+    expect(recorded).toEqual([
+      ["wamid.tpl.1", "972507406322", "conv-1"],
+      ["wamid.tpl.1", "972507406322", null],
+    ]);
+  });
 });
 
 describe("email channel units", () => {

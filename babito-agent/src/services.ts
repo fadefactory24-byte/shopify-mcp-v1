@@ -8,6 +8,8 @@ import { ChannelSender, EmailChannel } from "./email/channel.js";
 import { dbTokenStore, GraphMailClient, type MailApi } from "./email/graph.js";
 import { StaffNotifier, type HandoffNotifier } from "./pipeline/handoff.js";
 import { MessageProcessor } from "./pipeline/processor.js";
+import { StaffRelay } from "./pipeline/relay.js";
+import { repo } from "./db/repo.js";
 import { ShopifyGraphQLClient } from "./shopify/client.js";
 import { LiveShopifyService, type ShopifyService } from "./shopify/service.js";
 import { SocialSender } from "./social/client.js";
@@ -23,6 +25,8 @@ export interface Services {
   knowledge: KnowledgeService;
   notifier: HandoffNotifier;
   processor: MessageProcessor;
+  /** Lets a staff member answer an alert in plain words and approve a polished customer message. */
+  relay: StaffRelay;
   /** Present when the email channel is enabled. */
   email: EmailChannel | null;
   /** Present when the Messenger/Instagram channel is enabled; app.ts's webhook route uses it to send. */
@@ -92,6 +96,7 @@ export function buildServices(
       email: mail && alertTo.length ? { send: (subject, text) => mail.sendMail(alertTo, subject, text) } : null,
       flagEmail: email ? (handle) => email.flagLatest(handle) : undefined,
       handoffTemplate: cfg.STAFF_HANDOFF_TEMPLATE ? { name: cfg.STAFF_HANDOFF_TEMPLATE, language: cfg.STAFF_HANDOFF_TEMPLATE_LANG } : undefined,
+      onAlertSent: (wamid, staffNumber, conversationId) => repo.recordStaffAlert(db, wamid, conversationId, staffNumber.replace(/\D/g, "")),
       log,
     });
   const processor = new MessageProcessor(
@@ -118,5 +123,18 @@ export function buildServices(
     },
   );
   processorRef = processor;
-  return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, email, social };
+  const relay = new StaffRelay({
+    db,
+    llm,
+    knowledge,
+    log,
+    whatsapp,
+    sendToCustomer: (conv, customer, body) => processor.sendReply(conv, customer, body, null, "human_agent"),
+    staffNumbers: cfg.STAFF_WHATSAPP_NUMBERS.split(",").map((s) => s.trim()).filter(Boolean),
+    model: cfg.AI_MODEL_MAIN,
+    effort: cfg.AI_MODEL_MAIN_EFFORT,
+    historyMessages: cfg.AI_HISTORY_MESSAGES,
+    adminBaseUrl: publicBaseUrl(cfg),
+  });
+  return { db, log, llm, shopify, whatsapp: sender, knowledge, notifier, processor, relay, email, social };
 }

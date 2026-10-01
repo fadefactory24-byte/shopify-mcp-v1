@@ -1030,3 +1030,185 @@ describe("lessons for the bot (learned rules)", () => {
     expect(csrf.status).toBe(403);
   });
 });
+
+describe("staff relay (answer an alert in plain words, approve a polished customer message)", () => {
+  const STAFF = "972507406322";
+  const HEB_CUSTOMER = "972501110001";
+
+  // Starts a handoff-style situation: a Hebrew customer wrote, the bot answered, and staff got an alert.
+  async function withAlert(opts: { customerText?: string; phone?: string } = {}) {
+    const phone = opts.phone ?? HEB_CUSTOMER;
+    h.llm.push(say("בודקים את זה."));
+    await h.customerSays(textWebhook(phone, opts.customerText ?? "המוצר לא עובד, מה עושים?", { name: "דנה" }));
+    const [conv] = await h.q("select id from conversations");
+    await repo.recordStaffAlert(h.db, "wamid.alert.1", conv.id, STAFF);
+    h.llm.requests.length = 0;
+    h.whatsapp.sent.length = 0;
+    return conv.id as string;
+  }
+  const staffSays = async (text: string, replyTo?: string) => {
+    await h.customerSays(textWebhook(STAFF, text, { replyTo, name: "Owner" }));
+  };
+  const lastToStaff = () => h.whatsapp.sent.filter((s) => s.to === STAFF).at(-1)!;
+
+  it("a Hebrew customer + an Arabic instruction: the draft is requested in HEBREW, shown to staff, and nothing reaches the customer yet", async () => {
+    await withAlert();
+    h.llm.push(say("היי דנה, בדקנו מול הספק. נשלח לך הנחיות לאיפוס המכשיר ואם זה לא יפתור, נחליף לך אותו."));
+    await staffSays("قلها حكيت مع المورد، لازم تعمل ريسيت للجهاز، ولو ما زبط نبعتلها بديل", "wamid.alert.1");
+
+    const req = h.llm.requests[0]!;
+    expect(req.systemDynamic).toContain("REPLY LANGUAGE: Hebrew");
+    expect(req.systemStatic).toContain("TASK: STAFF RELAY");
+    expect(JSON.stringify(req.messages)).toContain("ريسيت للجهاز");
+    // The owner sees the draft, in Hebrew, with how to approve it.
+    const preview = lastToStaff().body;
+    expect(preview).toContain("📝 مسودة الرد");
+    expect(preview).toContain("היי דנה, בדקנו מול הספק");
+    expect(preview).toContain("العبرية");
+    // Nothing went to the customer.
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER)).toHaveLength(0);
+    // The staff message did not become a customer conversation.
+    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 0 }]);
+  });
+
+  it("an Arabic-writing customer gets an Arabic draft", async () => {
+    await withAlert({ customerText: "المنتج وصل مكسور", phone: "972501110002" });
+    h.llm.push(say("مرحبا، نعتذر عن ذلك. سنرسل لك بديلا."));
+    await staffSays("بدنا نبعتلها بديل", "wamid.alert.1");
+    expect(h.llm.requests[0]!.systemDynamic).toContain("REPLY LANGUAGE: Arabic");
+  });
+
+  it("replying 'أرسل' to the draft sends it to the customer as a team message and puts the chat in human mode", async () => {
+    const convId = await withAlert();
+    h.llm.push(say("היי דנה, נטפל בזה."));
+    await staffSays("طمنها", "wamid.alert.1");
+    const draftMsg = lastToStaff();
+
+    await staffSays("أرسل", draftMsg.id);
+    const toCustomer = h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER);
+    expect(toCustomer).toHaveLength(1);
+    expect(toCustomer[0]!.body).toBe("היי דנה, נטפל בזה.");
+    expect(lastToStaff().body).toContain("✅ أُرسلت");
+    const [conv] = await h.q("select mode from conversations where id = $1", [convId]);
+    expect(conv.mode).toBe("human");
+    const [msg] = await h.q("select author, status from messages where conversation_id = $1 and body = 'היי דנה, נטפל בזה.'", [convId]);
+    expect(msg).toEqual({ author: "human_agent", status: "sent" });
+    expect((await h.q("select status from relay_drafts"))[0].status).toBe("sent");
+
+    // Approving twice sends nothing more.
+    await staffSays("أرسل", draftMsg.id);
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER)).toHaveLength(1);
+  });
+
+  it("replying with a change revises the draft (previous draft goes to the model); only the latest can be sent", async () => {
+    await withAlert();
+    h.llm.push(say("טיוטה ראשונה ארוכה"));
+    await staffSays("طمنها", "wamid.alert.1");
+    const first = lastToStaff();
+    h.llm.push(say("טיוטה קצרה"));
+    await staffSays("خليها أقصر", first.id);
+    expect(JSON.stringify(h.llm.requests[1]!.messages)).toContain("טיוטה ראשונה ארוכה");
+    expect(JSON.stringify(h.llm.requests[1]!.messages)).toContain("خليها أقصر");
+    const second = lastToStaff();
+    expect(second.body).toContain("טיוטה קצרה");
+
+    // The old draft was replaced: approving it does nothing.
+    await staffSays("أرسل", first.id);
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER)).toHaveLength(0);
+    await staffSays("أرسل", second.id);
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER).map((s) => s.body)).toEqual(["טיוטה קצרה"]);
+  });
+
+  it("'إلغاء' cancels: nothing is sent", async () => {
+    await withAlert();
+    h.llm.push(say("טיוטה"));
+    await staffSays("طمنها", "wamid.alert.1");
+    await staffSays("إلغاء", lastToStaff().id);
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER)).toHaveLength(0);
+    expect((await h.q("select status from relay_drafts"))[0].status).toBe("cancelled");
+  });
+
+  it("'أرسل' without swiping on the draft still approves the latest pending draft", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה"));
+    await staffSays("طمنها", "wamid.alert.1");
+    await staffSays("أرسل");
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER).map((s) => s.body)).toEqual(["שלום דנה"]);
+  });
+
+  it("a send failure (e.g. outside the 24h window) is reported to staff, not hidden", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה"));
+    await staffSays("طمنها", "wamid.alert.1");
+    const draftMsg = lastToStaff();
+    // Only the customer send fails (the confirmation to staff must still go through).
+    const realSend = h.whatsapp.sendText.bind(h.whatsapp);
+    h.whatsapp.sendText = async (to: string, body: string) => {
+      if (to === HEB_CUSTOMER) throw new WhatsAppApiError("WhatsApp API 400 (code 131047): Re-engagement message", 400, 131047);
+      return realSend(to, body);
+    };
+    await staffSays("أرسل", draftMsg.id);
+    expect(lastToStaff().body).toContain("❌ ما وصلت");
+    expect(lastToStaff().body).toContain("131047");
+  });
+
+  it("staff chatting without replying to an alert or draft is NOT hijacked: it goes through the normal pipeline", async () => {
+    h.llm.push(say("היי, איך אפשר לעזור?"));
+    await staffSays("שלום, בדיקה");
+    expect(h.llm.requests).toHaveLength(1);
+    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 1 }]);
+  });
+
+  it("only staff numbers can use it: a customer replying to an alert id is treated as a normal customer", async () => {
+    await withAlert();
+    h.llm.push(say("שלום"));
+    await h.customerSays(textWebhook("972509998888", "היי", { replyTo: "wamid.alert.1" }));
+    expect(h.llm.requests).toHaveLength(1);
+    expect(JSON.stringify(h.llm.requests[0])).not.toContain("STAFF RELAY");
+    expect((await h.q("select count(*)::int n from relay_drafts"))[0].n).toBe(0);
+  });
+
+  it("a reply to the dashboard's test alert is acknowledged (proves the reply link works) and costs no model call", async () => {
+    await repo.recordStaffAlert(h.db, "wamid.test.1", null, STAFF);
+    await staffSays("اختبار", "wamid.test.1");
+    expect(h.llm.requests).toHaveLength(0);
+    expect(lastToStaff().body).toContain("التنبيه التجريبي");
+  });
+
+  it("a redelivered webhook does not draft twice", async () => {
+    await withAlert();
+    h.llm.push(say("טיוטה"));
+    const payload = textWebhook(STAFF, "طمنها", { replyTo: "wamid.alert.1", id: "wamid.staff.dup" });
+    await h.customerSays(payload);
+    await h.customerSays(payload);
+    expect(h.llm.requests).toHaveLength(1);
+    expect((await h.q("select count(*)::int n from relay_drafts"))[0].n).toBe(1);
+  });
+
+  it("a model failure tells staff instead of failing silently", async () => {
+    await withAlert();
+    h.llm.push(() => {
+      throw new Error("anthropic down");
+    });
+    await staffSays("طمنها", "wamid.alert.1");
+    expect(lastToStaff().body).toContain("ما قدرت أجهز المسودة");
+    expect((await h.q("select count(*)::int n from relay_drafts"))[0].n).toBe(0);
+  });
+
+  it("a draft quoting a price nobody mentioned is flagged to staff", async () => {
+    await withAlert();
+    h.llm.push(say("נחזיר לך 199.90 ₪"));
+    await staffSays("رح نرجعلها المبلغ", "wamid.alert.1");
+    expect(lastToStaff().body).toContain("سعر");
+    expect(lastToStaff().body).toContain("199.9");
+  });
+
+  it("a NOTE_TO_STAFF line is shown to staff and kept out of the customer message", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה, נחזור אליך.\nNOTE_TO_STAFF: ما حددت موعد، فما ذكرت تاريخ."));
+    await staffSays("قلها رح نرجعلها", "wamid.alert.1");
+    const preview = lastToStaff().body;
+    expect(preview).toContain("⚠️ ما حددت موعد");
+    expect((await h.q("select draft from relay_drafts"))[0].draft).toBe("שלום דנה, נחזור אליך.");
+  });
+});
