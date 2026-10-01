@@ -4,6 +4,16 @@ import type { Logger } from "../logger.js";
 import type { WhatsAppSender } from "../whatsapp/client.js";
 import { truncate } from "../util/text.js";
 import { displayHandle, isEmailHandle } from "../email/channel.js";
+import { socialPlatformOf } from "../social/webhook.js";
+
+/** Where the customer wrote and where staff must answer, in Arabic, so the alert says it explicitly. */
+export function replyWhere(handle: string): string {
+  if (isEmailHandle(handle)) return "عبر الإيميل: الرد من صندوق support@mybabito.com (Outlook)";
+  const social = socialPlatformOf(handle);
+  if (social === "messenger") return "عبر ماسنجر: الرد من Meta Business Suite ثم Inbox";
+  if (social === "instagram") return "عبر إنستغرام: الرد من Meta Business Suite ثم Inbox";
+  return "عبر واتساب البوت: الرد من داشبورد البوت (admin)";
+}
 
 export interface HandoffNotice {
   handoffId: string;
@@ -149,7 +159,7 @@ export class StaffNotifier implements HandoffNotifier {
     if (template && this.opts.whatsapp.sendTemplate) {
       // Template params can't contain newlines or be empty (WhatsApp rejects both).
       const oneLine = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 300) || "-";
-      const customer = oneLine(`${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`);
+      const customer = oneLine(`${n.customerName ?? ""} ${displayHandle(n.customerWaId)} (${replyWhere(n.customerWaId)})`);
       const reason = oneLine(`${n.reason}${n.orderName ? ` | Order ${n.orderName}` : ""}${n.changeType ? ` | ${n.changeType}` : ""}`);
       const summary = oneLine(n.summary ?? "(no summary)");
       const sendTemplate = this.opts.whatsapp.sendTemplate;

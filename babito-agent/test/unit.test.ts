@@ -316,7 +316,7 @@ describe("staff email alerts", () => {
       orderName: "#1042",
     });
     expect(templateSends).toEqual([
-      { to: "972507406322", template: "babito_staff_handoff", language: "en", bodyParams: ["Dana +972501234567", "complaint | Order #1042", "The stroller wheel is broken"] },
+      { to: "972507406322", template: "babito_staff_handoff", language: "en", bodyParams: ["Dana +972501234567 (عبر واتساب البوت: الرد من داشبورد البوت (admin))", "complaint | Order #1042", "The stroller wheel is broken"] },
     ]);
   });
 
@@ -463,5 +463,15 @@ describe("staff alert test button", () => {
     expect(r.map((x) => [x.to, x.ok])).toEqual([["972507406322", true], ["972500000000", false]]);
     expect(r[1]!.detail).toContain("132001");
     expect(await new StaffNotifier({ webhookUrl: "", staffNumbers: [], whatsapp: wa, email: null, log }).sendTest()).toEqual([{ to: "-", ok: false, detail: "STAFF_WHATSAPP_NUMBERS is empty" }]);
+  });
+});
+
+describe("handoff alert says where to reply", () => {
+  it("names the channel and where staff answers", async () => {
+    const { replyWhere } = await import("../src/pipeline/handoff.js");
+    expect(replyWhere("email:a@b.com")).toContain("Outlook");
+    expect(replyWhere("psid:1")).toContain("Business Suite");
+    expect(replyWhere("igsid:1")).toContain("إنستغرام");
+    expect(replyWhere("972501234567")).toContain("admin");
   });
 });

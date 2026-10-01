@@ -269,7 +269,7 @@ export const TOOLS = [
       "Transfer the conversation to a human team member. After this the AI stops replying in this chat. Use for: explicit request for a human, complaints, damaged/wrong/missing items, refunds/returns in progress, payment problems, lost/very late shipments, sensitive topics, or when you can't help.",
     schema: z.object({
       reason: z.enum(["customer_request", "complaint", "refund", "payment_issue", "shipping_issue", "uncertain", "tool_failure", "sensitive", "other"]),
-      summary: z.string().min(5).max(600).describe("Short summary for staff: what the customer needs, order number if known"),
+      summary: z.string().min(5).max(600).describe("Short summary for staff: what the customer needs, order number if known. Write it in the customer's own language (Hebrew if they wrote Hebrew, Arabic if they wrote Arabic; Hebrew for any other language), never translated into another language"),
       priority: z.enum(["normal", "high"]).default("normal"),
     }),
     async run(input, ctx) {
