@@ -1229,6 +1229,13 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER).map((s) => s.body)).toEqual(["היי דנה, נשלח לך מוצר חלופי."]);
   });
 
+  it("a staff voice note that is not a reply to anything gets a how-to hint, not the customer 'please write' reply", async () => {
+    await staffVoice();
+    expect(h.transcriber.calls).toBe(0);
+    expect(lastToStaff().body).toContain("اعمل Reply");
+    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 0 }]);
+  });
+
   it("a voice note that can't be transcribed is reported to staff, nothing is drafted", async () => {
     await withAlert();
     h.transcriber.next = "";

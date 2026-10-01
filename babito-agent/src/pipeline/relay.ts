@@ -130,7 +130,15 @@ export class StaffRelay {
     } else if (m.text || isVoice(m)) {
       draft = await repo.latestPendingRelayDraft(db, this.digits(m.from), DRAFT_VALID_MINUTES);
     }
-    if (!alert && !draft) return false;
+    if (!alert && !draft) {
+      // A staff voice note that answers nothing: never treat it as a customer message (the customer
+      // reply would just say "please write"); tell staff how to use it instead.
+      if (!isVoice(m)) return false;
+      if (await repo.markStaffMessageSeen(db, m.waMessageId)) {
+        void this.tell(m.from, "وصلتني رسالتك الصوتية، بس ما بعرف لأي زبون. اعمل Reply (اسحب على التنبيه أو على المسودة) واحكي من جديد.");
+      }
+      return true;
+    }
     if (!(await repo.markStaffMessageSeen(db, m.waMessageId))) return true; // redelivery: already handled
 
     const p = this.run(m, alert, draft)
