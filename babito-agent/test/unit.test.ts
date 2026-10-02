@@ -7,7 +7,7 @@ import type { Db } from "../src/db/client.js";
 import { runMigrations } from "../src/db/migrate.js";
 import { StaffNotifier } from "../src/pipeline/handoff.js";
 import { GraphMailClient } from "../src/email/graph.js";
-import { skipReason } from "../src/email/channel.js";
+import { parseShopifyContactForm, skipReason } from "../src/email/channel.js";
 import { extractPrices, isExplicitHumanRequest, ungroundedPrices } from "../src/agent/guardrails.js";
 import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
@@ -359,6 +359,20 @@ describe("email channel units", () => {
     const n = new StaffNotifier({ webhookUrl: "", staffNumbers: [], whatsapp: { sendText: async () => ({ waMessageId: "x" }) } as any, email: null, flagEmail: async (h) => void flagged.push(h), log: { warn() {}, info() {}, error() {} } as any });
     await n.notify({ handoffId: "h", conversationId: "c", customerWaId: "email:dana@example.com", customerName: "Dana", reason: "complaint", priority: "normal", summary: "x" });
     expect(flagged).toEqual(["email:dana@example.com"]);
+  });
+
+  it("parseShopifyContactForm reads name, email and message from Shopify's contact-form email (Hebrew and English)", () => {
+    const base = { id: "1", conversationId: null, fromAddress: "mailer@shopify.com", fromName: "Shopify", receivedAt: "", hasAttachments: false, headers: {} };
+    const he = parseShopifyContactForm({
+      ...base,
+      subject: "הודעת לקוח חדשה בתאריך 2 באוקטובר 2026 בשעה 09:43",
+      text: "התקבלה הודעה חדשה מטופס יצירת הקשר של החנות המקוונת שלך.\r\nקוד מדינה:\r\n\r\nIL\r\n\r\nName:\r\n\r\nזהר\r\n\r\nאימייל:\r\n\r\nzohar.b.shimol@gmail.com\r\n\r\nתוכן:\r\n\r\nאני הזמנתי מנשא ואני רוצה לבטל בבקשה\r\nמס הזמנה1368",
+    });
+    expect(he).toEqual({ email: "zohar.b.shimol@gmail.com", name: "זהר", message: "אני הזמנתי מנשא ואני רוצה לבטל בבקשה\nמס הזמנה1368" });
+    const en = parseShopifyContactForm({ ...base, subject: "New customer message on October 2", text: "Name:\n\nDana\n\nEmail:\n\ndana@example.com\n\nBody:\n\nWhere is my order?" });
+    expect(en).toEqual({ email: "dana@example.com", name: "Dana", message: "Where is my order?" });
+    expect(parseShopifyContactForm({ ...base, subject: "Order #1 placed", text: "Email:\n\na@b.com\n\nBody:\n\nx" })).toBeNull();
+    expect(parseShopifyContactForm({ ...base, fromAddress: "x@evil.com", subject: "New customer message", text: "Email:\n\na@b.com\n\nBody:\n\nx" })).toBeNull();
   });
 
   it("skipReason: customers pass, automated mail is skipped", () => {

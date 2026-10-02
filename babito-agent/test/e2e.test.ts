@@ -766,6 +766,32 @@ describe("email channel (support mailbox)", () => {
     await h.processor.drain();
   };
 
+  const FORM_TEXT =
+    "התקבלה הודעה חדשה מטופס יצירת הקשר של החנות המקוונת שלך.\r\nקוד מדינה:\r\n\r\nIL\r\n\r\nName:\r\n\r\nזהר\r\n\r\nאימייל:\r\n\r\nzohar.b.shimol@gmail.com\r\n\r\nתוכן:\r\n\r\nאני הזמנתי מנשא ואני רוצה לבטל בבקשה\r\nמס הזמנה1368";
+
+  it("a store contact-form message (sent by Shopify's mailer) is answered as the customer's own email, by a new email to them", async () => {
+    await emailHarness();
+    h.llm.push((req) => {
+      expect(JSON.stringify(req.messages)).toContain("אני הזמנתי מנשא ואני רוצה לבטל");
+      expect(JSON.stringify(req)).toContain("CHANNEL: EMAIL");
+      return say("היי זהר, ההזמנה כבר בדרך אלייך.\nצוות BABITO")(req);
+    });
+    h.mail.receive("mailer@shopify.com", FORM_TEXT, { subject: "הודעת לקוח חדשה בתאריך 2 באוקטובר 2026 בשעה 09:43", fromName: "Shopify" });
+    await round();
+    const [cust] = await h.q("select wa_id, display_name from customers");
+    expect(cust).toEqual({ wa_id: "email:zohar.b.shimol@gmail.com", display_name: "זהר" });
+    expect(h.mail.replies).toHaveLength(0); // never "reply" to Shopify's mailer
+    expect(h.mail.mails).toEqual([{ to: ["zohar.b.shimol@gmail.com"], subject: "BABITO", text: "היי זהר, ההזמנה כבר בדרך אלייך.\nצוות BABITO" }]);
+  });
+
+  it("other Shopify emails are still ignored", async () => {
+    await emailHarness();
+    h.mail.receive("mailer@shopify.com", "Your store has a new order", { subject: "Order #1400 placed" });
+    await round();
+    expect(h.llm.requests).toHaveLength(0);
+    expect(await h.q("select count(*)::int n from customers")).toEqual([{ n: 0 }]);
+  });
+
   it("first poll never answers old mail; a new customer email is answered in the same thread with email rules", async () => {
     await h.db.close();
     h.processor.stopTimers();

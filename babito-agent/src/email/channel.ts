@@ -59,6 +59,42 @@ export function skipReason(m: InboxMessage, mailbox: string): string | null {
   return null;
 }
 
+const SHOPIFY_FORM_SUBJECT = /(הודעת לקוח חדשה|new customer message|رسالة عميل جديدة)/i;
+const LABEL = (names: string) => new RegExp(`^\\s*(?:${names})\\s*:\\s*$`, "i");
+const NAME_LABEL = LABEL("name|שם|الاسم");
+const EMAIL_LABEL = LABEL("email|e-mail|אימייל|דוא\"ל|البريد الإلكتروني");
+const BODY_LABEL = LABEL("body|message|תוכן|הודעה|المحتوى|الرسالة");
+const OTHER_LABEL = /^\s*[^\s:][^:]{0,30}:\s*$/;
+
+/**
+ * The store's contact form arrives as an email from Shopify's mailer, not from the customer. Pull
+ * the customer's name, email and message out of it so it is handled like their own email. Null when
+ * it isn't a contact-form notification (or has no usable customer email).
+ */
+export function parseShopifyContactForm(m: InboxMessage): { email: string; name: string | null; message: string } | null {
+  const domain = m.fromAddress.split("@")[1] ?? "";
+  if (!(domain === "shopify.com" || domain.endsWith(".shopify.com"))) return null;
+  if (!SHOPIFY_FORM_SUBJECT.test(m.subject)) return null;
+  const lines = m.text.replace(/\r/g, "").split("\n");
+  const valueAfter = (label: RegExp, untilLabel: boolean) => {
+    const i = lines.findIndex((l) => label.test(l));
+    if (i < 0) return null;
+    const out: string[] = [];
+    for (const l of lines.slice(i + 1)) {
+      if (untilLabel && OTHER_LABEL.test(l) && out.some((x) => x.trim())) break;
+      if (!untilLabel && out.length === 0 && !l.trim()) continue;
+      if (untilLabel && !l.trim() && out.some((x) => x.trim())) break;
+      out.push(l);
+    }
+    return out.join("\n").trim() || null;
+  };
+  const email = (valueAfter(EMAIL_LABEL, true) ?? "").match(/[^\s<>()@]+@[^\s<>()@]+\.[a-z]{2,}/i)?.[0]?.toLowerCase();
+  if (!email || email.endsWith("@shopify.com")) return null;
+  const message = valueAfter(BODY_LABEL, false);
+  if (!message) return null;
+  return { email, name: valueAfter(NAME_LABEL, true), message: message.slice(0, 4000) };
+}
+
 /** Text of an inbound email for the AI: subject on the first message of a thread, capped. */
 function inboundText(m: InboxMessage): string | null {
   const body = m.text.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000);
@@ -122,14 +158,16 @@ export class EmailChannel {
     for (const m of messages) {
       const at = new Date(m.receivedAt);
       if (at > newest) newest = at;
-      const reason = skipReason(m, this.deps.mailbox);
+      // A contact-form message comes from Shopify's mailer: treat it as the customer's own email.
+      const form = parseShopifyContactForm(m);
+      const reason = form ? null : skipReason(m, this.deps.mailbox);
       if (reason) {
         out.skipped++;
         continue;
       }
-      const text = inboundText(m);
+      const text = form ? `[Store contact form]\n${form.message}` : inboundText(m);
       const conversationId = await this.deps.db.tx(async (tx) => {
-        const customer = await repo.upsertCustomer(tx, emailHandle(m.fromAddress), m.fromName);
+        const customer = await repo.upsertCustomer(tx, emailHandle(form?.email ?? m.fromAddress), form ? form.name : m.fromName);
         const conv = await repo.getOrCreateOpenConversation(tx, customer.id);
         if ((conv as { channel?: string }).channel !== "email") await tx.query(`update conversations set channel = 'email' where id = $1`, [conv.id]);
         const row = await repo.insertInboundMessage(tx, {
@@ -138,7 +176,8 @@ export class EmailChannel {
           waMessageId: m.id,
           type: text ? "text" : m.hasAttachments ? "document" : "text",
           body: text,
-          media: m.hasAttachments ? { kind: "email_attachment" } : null,
+          // A contact-form notification can't be replied to in-thread (it's from Shopify): sendReply writes a new email.
+          media: form ? { kind: "contact_form" } : m.hasAttachments ? { kind: "email_attachment" } : null,
           waTimestamp: at,
         });
         if (!row) return null; // already ingested (overlap window)
@@ -195,13 +234,13 @@ export class EmailChannel {
   /** Reply to an email customer: in the thread of their latest email, or a new email if none. */
   async sendReply(handle: string, body: string): Promise<{ waMessageId: string }> {
     const address = emailOf(handle)!;
-    const { rows } = await this.deps.db.query<{ wa_message_id: string }>(
-      `select m.wa_message_id from messages m join customers c on c.id = m.customer_id
+    const { rows } = await this.deps.db.query<{ wa_message_id: string; media: { kind?: string } | null }>(
+      `select m.wa_message_id, m.media from messages m join customers c on c.id = m.customer_id
        where c.wa_id = $1 and m.direction = 'inbound' and m.wa_message_id is not null
        order by m.created_at desc limit 1`,
       [handle],
     );
-    const replyTo = rows[0]?.wa_message_id;
+    const replyTo = rows[0]?.media?.kind === "contact_form" ? undefined : rows[0]?.wa_message_id;
     if (replyTo) return { waMessageId: await this.deps.mail.reply(replyTo, body) };
     await this.deps.mail.sendMail([address], "BABITO", body);
     return { waMessageId: `email-new-${this.now()}` };
