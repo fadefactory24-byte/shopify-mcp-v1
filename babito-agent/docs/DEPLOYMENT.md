@@ -136,6 +136,10 @@ A staff member (a number in `STAFF_WHATSAPP_NUMBERS`) replies on WhatsApp to a h
 - A message from a staff number that is not a reply to an alert/draft still goes through the normal customer pipeline (so staff can test the bot).
 - Messages the staff number sends to the business number are only handled here; they are not stored as customer chats.
 
+## 5g. Replies only in business hours
+
+Set `REPLY_ONLY_IN_BUSINESS_HOURS=true` so the bot answers only inside `settings.business_hours` (default Sun-Thu 09-18, Fri 09-13, Sat closed, Israel time). A customer who writes outside them gets ONE short acknowledgment (Hebrew/Arabic/English, once per 12h per chat) and the message waits; at opening the AI answers everything that waited. Exceptions: chats owned by staff, blocked contacts, emergencies (choking, 101...), and WhatsApp/Messenger/Instagram messages whose next opening is more than 20h away (their 24h reply window would close first: they are answered at once). Email always waits. Staff alerts are unaffected (24h). Change the hours in the `business_hours` setting.
+
 ## 6. Scheduled jobs
 
 None to set up. The server runs the sweeper every 15s and the retention purge every `MAINTENANCE_INTERVAL_HOURS` (default 24). If you prefer an external scheduler, set it to `0` and call:

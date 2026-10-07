@@ -119,6 +119,7 @@ export function buildServices(
       humanModeTimeoutHours: cfg.HUMAN_MODE_TIMEOUT_HOURS,
       maxAttempts: cfg.MAX_PROCESS_ATTEMPTS,
       typingIndicator: cfg.WHATSAPP_TYPING_INDICATOR,
+      replyOnlyInHours: cfg.REPLY_ONLY_IN_BUSINESS_HOURS,
       logBodies: cfg.LOG_MESSAGE_BODIES,
       fastModel: cfg.AI_MODEL_FAST,
     },

@@ -19,6 +19,8 @@ export interface ConversationContext {
   failed_verifications?: { at: string }[];
   /** Whether we already told this customer they hit the rate limit. */
   rate_limit_notified_at?: string;
+  /** When the "we'll reply in business hours" acknowledgment was last sent. */
+  after_hours_ack_at?: string;
   /** Message count covered by the rolling summary. */
   summarized_count?: number;
 }

@@ -1383,3 +1383,84 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect((await h.q("select draft from relay_drafts"))[0].draft).toBe("שלום דנה, נחזור אליך.");
   });
 });
+
+describe("replies only in business hours (REPLY_ONLY_IN_BUSINESS_HOURS)", () => {
+  // Israel is UTC+3 until 25 Oct 2026. Default hours: Sun-Thu 09-18, Fri 09-13, Sat closed.
+  const at = (iso: string) => vi.useFakeTimers({ toFake: ["Date"], now: new Date(iso) });
+  const hoursHarness = async () => {
+    await h.db.close();
+    h.processor.stopTimers();
+    h = await createHarness({ REPLY_ONLY_IN_BUSINESS_HOURS: "true", EMAIL_CHANNEL_ENABLED: "true", EMAIL_MAILBOX: "support@mybabito.com" });
+  };
+
+  it("WhatsApp at 23:00 (opens in 10h): one acknowledgment, no AI; at opening the AI answers", async () => {
+    await hoursHarness();
+    at("2026-10-14T20:00:00Z"); // Wed 23:00 IDT
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "שלום, איפה ההזמנה שלי?"));
+    expect(h.llm.requests).toHaveLength(0);
+    expect(h.whatsapp.sent.map((m) => m.body)).toEqual(["קיבלנו את פנייתך ונחזור אלייך בשעות הפעילות שלנו.\nצוות BABITO"]);
+    // A second message the same night: no second acknowledgment.
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "??", { id: "wamid.night2" }));
+    expect(h.whatsapp.sent).toHaveLength(1);
+    // Thursday 10:30: the sweeper picks the waiting messages up and the AI answers both at once.
+    at("2026-10-15T07:30:00Z");
+    h.llm.push(say("היי, בודקים את ההזמנה."));
+    await h.processor.sweep();
+    await h.processor.drain();
+    expect(h.llm.requests).toHaveLength(1);
+    expect(h.whatsapp.sent.at(-1)!.body).toBe("היי, בודקים את ההזמנה.");
+  });
+
+  it("Arabic customers get the acknowledgment in Arabic", async () => {
+    await hoursHarness();
+    at("2026-10-14T20:00:00Z");
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "مرحبا، وين طلبي؟"));
+    expect(h.whatsapp.sent[0]!.body).toContain("وصلتنا رسالتك");
+  });
+
+  it("an emergency is never held", async () => {
+    await hoursHarness();
+    at("2026-10-14T20:00:00Z");
+    h.llm.push(say("התקשרו למד\"א 101 עכשיו."));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "התינוק נחנק!!"));
+    expect(h.llm.requests).toHaveLength(1);
+  });
+
+  it("Friday 15:00 WhatsApp (next opening is 42h away, past the 24h reply window): answered immediately", async () => {
+    await hoursHarness();
+    at("2026-10-16T12:00:00Z"); // Fri 15:00 IDT
+    h.llm.push(say("שלום!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(h.llm.requests).toHaveLength(1);
+    expect(h.whatsapp.sent.map((m) => m.body)).toEqual(["שלום!"]);
+  });
+
+  it("email on Friday 15:00 waits for Sunday (no reply window for email), with one acknowledgment", async () => {
+    await hoursHarness();
+    await h.email!.poll(); // sets the watermark
+    at("2026-10-16T12:00:00Z");
+    h.mail.receive("dana@example.com", "היי, מתי זה מגיע?");
+    await h.email!.poll();
+    await h.processor.drain();
+    expect(h.llm.requests).toHaveLength(0);
+    expect(h.mail.replies.map((r) => r.text)).toEqual(["קיבלנו את פנייתך ונחזור אלייך בשעות הפעילות שלנו.\nצוות BABITO"]);
+  });
+
+  it("during business hours nothing changes", async () => {
+    await hoursHarness();
+    at("2026-10-15T07:30:00Z"); // Thu 10:30
+    h.llm.push(say("שלום!"));
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    expect(h.whatsapp.sent.map((m) => m.body)).toEqual(["שלום!"]);
+  });
+
+  it("a chat owned by staff is not affected (staff alerts keep working at night)", async () => {
+    await hoursHarness();
+    at("2026-10-14T20:00:00Z");
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "היי"));
+    const [conv] = await h.q("select id from conversations");
+    await h.q("update conversations set mode = 'human', human_since = now(), human_last_activity_at = now() where id = $1", [conv.id]);
+    await h.customerSays(textWebhook(CUSTOMER_PHONE, "עוד שאלה", { id: "wamid.n3" }));
+    expect(h.notifier.waiting).toHaveLength(1);
+  });
+});

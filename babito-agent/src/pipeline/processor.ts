@@ -9,6 +9,8 @@ import { detectLanguage, toWhatsAppText, truncate } from "../util/text.js";
 import { isPermanentSendError, type WhatsAppSender } from "../whatsapp/client.js";
 import type { EchoMessage, InboundMessage, StatusUpdate } from "../whatsapp/webhook.js";
 import { socialPlatformOf } from "../social/webhook.js";
+import { businessClock, nextOpening } from "../agent/knowledge.js";
+import { isEmailHandle } from "../email/channel.js";
 import { performHandoff } from "./handoff.js";
 
 export interface ProcessorConfig {
@@ -18,6 +20,8 @@ export interface ProcessorConfig {
   humanModeTimeoutHours: number;
   maxAttempts: number;
   typingIndicator: boolean;
+  /** Hold customer messages that arrive outside business hours until the store opens (see config). */
+  replyOnlyInHours?: boolean;
   logBodies: boolean;
   fastModel: string;
 }
@@ -191,7 +195,51 @@ export class MessageProcessor {
 
   // -------------------------------------------------------------------- process
 
+  /** A customer message that is about a life-threatening emergency is never held for business hours. */
+  private static readonly EMERGENCY = /חנק|נחנק|נחנקת|מד["״]?א|לא נושם|101|اختناق|يختنق|بيختنق|مختنق|choking|choked|not breathing|ambulance/i;
+
+  private static readonly AFTER_HOURS_ACK: Record<string, string> = {
+    he: "קיבלנו את פנייתך ונחזור אלייך בשעות הפעילות שלנו.\nצוות BABITO",
+    ar: "وصلتنا رسالتك وبنرد عليك بساعات الدوام تبعنا.\nفريق BABITO",
+    en: "We received your message and will reply during our working hours.\nBABITO team",
+  };
+
+  /**
+   * Outside business hours the AI stays quiet and the message waits for the next opening (one short
+   * acknowledgment per night). Not for staff-owned chats, blocked contacts, emergencies, or chat apps whose
+   * 24h reply window would close before the store opens.
+   */
+  private async holdForBusinessHours(conversationId: string): Promise<boolean> {
+    const conv = await repo.getConversation(this.db, conversationId);
+    if (!conv || conv.mode !== "ai") return false;
+    const customer = await repo.getCustomer(this.db, conv.customer_id);
+    if (!customer || customer.is_blocked) return false;
+    const settings = await this.deps.knowledge.settings();
+    if (!settings.botEnabled || !settings.businessHours) return false;
+    if (businessClock(settings.businessHours).staffAvailableNow) return false;
+    const { rows } = await this.db.query<{ body: string | null; created_at: string }>(
+      `select body, created_at from messages where conversation_id = $1 and direction = 'inbound' and status = 'received' order by created_at asc`,
+      [conversationId],
+    );
+    if (rows.length === 0) return false;
+    if (rows.some((r) => r.body && MessageProcessor.EMERGENCY.test(r.body))) return false;
+    if (!isEmailHandle(customer.wa_id)) {
+      const opens = nextOpening(settings.businessHours);
+      const oldest = new Date(rows[0]!.created_at).getTime();
+      if (!opens || opens.getTime() - oldest > 20 * 3600_000) return false; // would outlast the 24h reply window
+    }
+    const acked = conv.context.after_hours_ack_at && Date.now() - new Date(conv.context.after_hours_ack_at).getTime() < 12 * 3600_000;
+    if (!acked) {
+      await repo.updateConversationContext(this.db, conversationId, { ...conv.context, after_hours_ack_at: new Date().toISOString() });
+      const lang = detectLanguage(rows.map((r) => r.body ?? "").join("\n")) ?? conv.language ?? customer.preferred_language ?? "he";
+      await this.sendReply(conv, customer, MessageProcessor.AFTER_HOURS_ACK[lang] ?? MessageProcessor.AFTER_HOURS_ACK.he!, null, "system");
+      this.log.info({ event: "after_hours_ack", conversationId }, "message held until business hours");
+    }
+    return true;
+  }
+
   async processConversation(conversationId: string): Promise<void> {
+    if (this.cfg.replyOnlyInHours && (await this.holdForBusinessHours(conversationId))) return;
     const owner = randomUUID();
     if (!(await repo.claimConversation(this.db, conversationId, owner, LEASE_SECONDS))) {
       this.log.debug({ conversationId }, "conversation busy; the lease holder will pick up new messages");

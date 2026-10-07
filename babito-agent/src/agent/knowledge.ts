@@ -143,3 +143,12 @@ export function businessClock(hours: Settings["businessHours"], now = new Date()
   const idx = DAY_KEYS.indexOf(weekday as (typeof DAY_KEYS)[number]);
   return { local: `${get("year")}-${get("month")}-${get("day")} ${hhmm} (${weekday})`, staffAvailableNow: open, dayIndex: idx };
 }
+
+/** The next moment (15-minute resolution, within 8 days) the store is open; null if it never opens. */
+export function nextOpening(hours: Settings["businessHours"], from = new Date()): Date | null {
+  for (let i = 0; i <= 8 * 24 * 4; i++) {
+    const at = new Date(from.getTime() + i * 15 * 60_000);
+    if (businessClock(hours, at).staffAvailableNow) return at;
+  }
+  return null;
+}

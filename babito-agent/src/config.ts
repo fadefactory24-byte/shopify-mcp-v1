@@ -37,6 +37,12 @@ const ConfigSchema = z.object({
   WHATSAPP_PHONE_NUMBER_ID: z.string().min(1),
   WHATSAPP_GRAPH_VERSION: z.string().default("v23.0"),
   WHATSAPP_TYPING_INDICATOR: bool(true),
+  /**
+   * Answer customers only during business hours (settings.business_hours): outside them the message waits
+   * for the next opening, with one short acknowledgment. WhatsApp/Messenger/Instagram messages that would
+   * wait longer than 20h are answered at once (their 24h reply window would close). Emergencies are never held.
+   */
+  REPLY_ONLY_IN_BUSINESS_HOURS: bool(false),
   /** Only for /admin/whatsapp-connect (Embedded Signup for a WhatsApp Business app number). */
   META_APP_ID: z.string().optional().default(""),
   WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID: z.string().optional().default(""),
