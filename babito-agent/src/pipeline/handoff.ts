@@ -99,6 +99,20 @@ export class StaffNotifier implements HandoffNotifier {
     if (last !== undefined && now - last < WAITING_EVERY_MS) return;
     this.lastWaiting.set(n.conversationId, now);
     const who = `${n.customerName ?? ""} ${displayHandle(n.customerWaId)}`.trim();
+    // Also on WhatsApp, so staff can answer in plain words (the reply goes through the staff relay).
+    const oneLine = (x: string) => x.replace(/\s+/g, " ").trim().slice(0, 300) || "-";
+    const template = this.opts.handoffTemplate;
+    for (const num of this.opts.staffNumbers) {
+      const send =
+        template && this.opts.whatsapp.sendTemplate
+          ? this.opts.whatsapp.sendTemplate.call(this.opts.whatsapp, num, template.name, template.language, [
+              oneLine(`${who} (${replyWhere(n.customerWaId)})`),
+              "Customer replied",
+              oneLine(n.text ?? "(media or empty message)"),
+            ])
+          : this.opts.whatsapp.sendText(num, `Customer replied: ${who}\n${truncate(n.text ?? "(media or empty message)", 500)}`);
+      void send.then((r) => this.remember(r, num, n.conversationId)).catch((err) => this.opts.log.warn({ event: "staff_waiting_whatsapp_failed", err: String(err) }, "waiting alert on WhatsApp failed"));
+    }
     await this.sendEmail(
       `[BABITO] Customer waiting for staff: ${who}`,
       `The chat is with staff (the bot is not answering) and the customer wrote again:\n\n${truncate(n.text ?? "(media or empty message)", 500)}${this.link(n.conversationId)}`,

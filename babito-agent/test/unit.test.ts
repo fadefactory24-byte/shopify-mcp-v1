@@ -288,6 +288,27 @@ describe("staff email alerts", () => {
     expect(sent.filter((s) => s.subject.includes("System alert"))).toHaveLength(1);
   });
 
+  it("a customer writing while the chat is with staff also alerts staff on WhatsApp (template) and records the alert for replies", async () => {
+    const sends: { to: string; params: string[] }[] = [];
+    const wa = { sendText: async () => ({ waMessageId: "x" }), sendTemplate: async (to: string, _t: string, _l: string, params: string[]) => (sends.push({ to, params }), { waMessageId: "wamid.wait.1" }) } as any;
+    const recorded: [string, string, string | null][] = [];
+    const n = new StaffNotifier({
+      webhookUrl: "",
+      staffNumbers: ["972507406322"],
+      whatsapp: wa,
+      email: null,
+      handoffTemplate: { name: "t", language: "en" },
+      onAlertSent: async (wamid, to, conv) => void recorded.push([wamid, to, conv]),
+      log,
+    });
+    await n.customerWaiting({ conversationId: "c9", customerWaId: "email:zohar@example.com", customerName: "זהר", text: "המנשא\nסגור באריזה" });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(sends).toHaveLength(1);
+    expect(sends[0]!.params[1]).toBe("Customer replied");
+    expect(sends[0]!.params[2]).toBe("המנשא סגור באריזה");
+    expect(recorded).toEqual([["wamid.wait.1", "972507406322", "c9"]]);
+  });
+
   it("handoff with a configured template sends via sendTemplate instead of plain text, sanitizing params", async () => {
     const templateSends: { to: string; template: string; language: string; bodyParams: string[] }[] = [];
     const wa = {
