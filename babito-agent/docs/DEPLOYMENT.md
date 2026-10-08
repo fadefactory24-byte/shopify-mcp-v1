@@ -134,7 +134,7 @@ A staff member (a number in `STAFF_WHATSAPP_NUMBERS`) replies on WhatsApp to a h
 - Needs migration `20261001000001_staff_relay.sql` (run `/cron/migrate`).
 - Replying to an alert only works for alerts sent after this was deployed (alert ids are stored in `staff_alerts`). To verify the link end to end, press "Send a test alert" in `/admin` and reply to it: you should get a confirmation.
 - The draft sees the whole chat and what staff already told the bot about this customer in the last 30 days (earlier instructions, e.g. a return address given yesterday), so "send her the return details" works.
-- A message from a staff number that is not a Reply to something the bot knows (no Reply, or a Reply to some other bot message) is read as being about the one customer staff were alerted about in the last 48h (the preview names them; nothing is sent without approval). With two or more such customers the bot asks which one. With none, it goes through the normal customer pipeline (so staff can test the bot); a voice note gets a how-to hint.
+- A message from a staff number that is not a Reply to something the bot knows (no Reply, or a Reply to some other bot message) is matched to a customer: the customer name or order number it mentions (looked up in the last 30 days of chats), else the one customer staff were alerted about in the last 48h (the preview names them; nothing is sent without approval). With several candidates, or none, the bot asks which customer or order instead of answering like a customer.
 - Every message the bot sends staff about a chat (alerts, send confirmations) can be replied to.
 - Messages the staff number sends to the business number are only handled here; they are not stored as customer chats.
 

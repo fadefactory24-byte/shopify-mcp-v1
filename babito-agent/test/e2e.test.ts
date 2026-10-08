@@ -1178,11 +1178,26 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect(lastToStaff().body).toContain("131047");
   });
 
-  it("staff chatting without replying to an alert or draft is NOT hijacked: it goes through the normal pipeline", async () => {
-    h.llm.push(say("היי, איך אפשר לעזור?"));
-    await staffSays("שלום, בדיקה");
+  it("a staff message that names no customer and follows no alert is not answered like a customer: the bot asks which customer or order", async () => {
+    await staffSays("ابعتلها معلومات الارجاع");
+    expect(h.llm.requests).toHaveLength(0);
+    expect(lastToStaff().body).toContain("عن أي زبون أو طلب");
+    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 0 }]);
+  });
+
+  it("naming the customer or the order number in the message is enough, even with alerts about several customers", async () => {
+    await withAlert({ customerText: "הזמנה #1368 לא הגיעה" });
+    h.llm.push(say("בודקים."));
+    await h.customerSays(textWebhook("972501110009", "היי, איפה ההזמנה? #1400", { name: "רונית" }));
+    const convs = await h.q("select id from conversations order by created_at");
+    await repo.recordStaffAlert(h.db, "wamid.alert.2", convs[1].id, STAFF);
+    h.llm.requests.length = 0;
+
+    h.llm.push(say("שלום דנה, פרטי ההחזרה."));
+    await staffSays("طلب #1368 ابعتلها معلومات الارجاع");
     expect(h.llm.requests).toHaveLength(1);
-    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 1 }]);
+    expect(lastToStaff().body).toContain("דנה");
+    expect(lastToStaff().body).not.toContain("فهمت أنك تقصد");
   });
 
   it("a typed message with no Reply, after an alert about ONE customer, is understood as being about them (named in the preview, nothing sent)", async () => {
@@ -1213,7 +1228,7 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     h.llm.requests.length = 0;
     await staffSays("ابعتلها معلومات الارجاع");
     expect(h.llm.requests).toHaveLength(0);
-    expect(lastToStaff().body).toContain("أكتر من زبون");
+    expect(lastToStaff().body).toContain("مش متأكد أي زبون");
     expect(lastToStaff().body).toContain("דנה");
     expect(lastToStaff().body).toContain("רונית");
   });

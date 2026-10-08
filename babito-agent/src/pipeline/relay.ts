@@ -150,29 +150,27 @@ export class StaffRelay {
     }
     if (!alert && !draft && (m.replyToId || m.text || isVoice(m))) {
       // Not a Reply to a message the bot knows (a Reply to some other message of ours, or no Reply at
-      // all). If staff were alerted about exactly one customer lately it is about them: the preview
-      // names the customer and nothing is sent without approval. With several, ask; never guess.
-      const recent = await repo.recentStaffCustomers(db, this.digits(m.from), 48);
+      // all). Work out which customer it is about, never guessing between several: the customer or
+      // order number the message names, else the one customer staff were alerted about in the last 48h
+      // (the preview names them; nothing is sent without approval). Otherwise ask.
+      const label = (d: { customer_name: string | null; customer_handle: string }) => `${d.customer_name ?? ""} ${displayHandle(d.customer_handle)}`.trim();
+      const mentioned = m.text ? await repo.customersMentioned(db, m.text, this.digits(m.from), 30) : [];
+      const recent = mentioned.length ? mentioned : await repo.recentStaffCustomers(db, this.digits(m.from), 48);
       if (recent.length === 1) {
-        const who = `${recent[0]!.customer_name ?? ""} ${displayHandle(recent[0]!.customer_handle)}`.trim();
-        alert = { conversation_id: recent[0]!.conversation_id, guessed: who };
-      } else if (recent.length > 1) {
+        alert = { conversation_id: recent[0]!.conversation_id, guessed: mentioned.length ? undefined : label(recent[0]!) };
+      } else if (m.text || isVoice(m) || m.replyToId) {
         if (await repo.markStaffMessageSeen(db, m.waMessageId)) {
-          const names = recent.map((d) => `• ${`${d.customer_name ?? ""} ${displayHandle(d.customer_handle)}`.trim()}`).join("\n");
-          void this.tell(m.from, `وصلتني رسالتك، بس عندك أكتر من زبون بتنبيهات حديثة:\n${names}\nاعمل Reply على تنبيه أو مسودة الزبون المقصود وبجهز لك الرد.`);
+          void this.tell(
+            m.from,
+            recent.length > 1
+              ? `وصلتني رسالتك، بس مش متأكد أي زبون تقصد:\n${recent.map((d) => `• ${label(d)}`).join("\n")}\nاعمل Reply على تنبيه أو مسودة الزبون المقصود، أو اكتب اسمه أو رقم طلبه مع الرسالة.`
+              : "ما فهمت عن أي زبون أو طلب تقصد. اعمل Reply على تنبيه الزبون، أو اكتب اسمه أو رقم الطلب مع الرسالة (مثلاً: زهار #1368 ابعتلها معلومات الارجاع).",
+          );
         }
         return true;
       }
     }
-    if (!alert && !draft) {
-      // A staff voice note that answers nothing: never treat it as a customer message (the customer
-      // reply would just say "please write"); tell staff how to use it instead.
-      if (!isVoice(m)) return false;
-      if (await repo.markStaffMessageSeen(db, m.waMessageId)) {
-        void this.tell(m.from, "وصلتني رسالتك الصوتية، بس ما بعرف لأي زبون. اعمل Reply (اسحب على التنبيه أو على المسودة) واحكي من جديد.");
-      }
-      return true;
-    }
+    if (!alert && !draft) return false;
     if (!(await repo.markStaffMessageSeen(db, m.waMessageId))) return true; // redelivery: already handled
 
     const p = this.run(m, alert, draft)

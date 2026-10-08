@@ -633,6 +633,25 @@ export const repo = {
     return rows;
   },
 
+  /**
+   * Customers a staff message names: by an order number that appears in their chat ("#1368"), or by a
+   * word of their display name. One row per customer, latest chat. Never the staff member's own chat.
+   */
+  async customersMentioned(db: Db, text: string, staffNumber: string, days: number): Promise<{ conversation_id: string; customer_name: string | null; customer_handle: string }[]> {
+    const orders = [...new Set([...text.matchAll(/(?<![0-9])(\d{4,6})(?![0-9])/g)].map((m) => m[1]!))];
+    const { rows } = await db.query<{ conversation_id: string; customer_name: string | null; customer_handle: string; hit: boolean }>(
+      `select distinct on (cu.id) c.id as conversation_id, cu.display_name as customer_name, cu.wa_id as customer_handle,
+              ($3::text is not null and m.body ~ $3) as hit
+       from messages m join conversations c on c.id = m.conversation_id join customers cu on cu.id = c.customer_id
+       where m.created_at > now() - make_interval(days => $1) and cu.wa_id <> $2
+       order by cu.id, (($3::text is not null and m.body ~ $3)) desc, m.created_at desc`,
+      [days, staffNumber, orders.length ? `(^|[^0-9])(${orders.join("|")})([^0-9]|$)` : null],
+    );
+    const words = new Set(text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length >= 3));
+    const named = (n: string | null) => !!n && n.toLowerCase().split(/[^\p{L}\p{N}]+/u).some((w) => w.length >= 3 && words.has(w));
+    return rows.filter((r) => r.hit || named(r.customer_name)).map(({ hit: _hit, ...r }) => r);
+  },
+
   /** The open conversation of this customer, if any (an alert may point at a chat that was closed since). */
   async findOpenConversation(db: Db, customerId: string): Promise<Conversation | null> {
     const { rows } = await db.query<Conversation>(`select * from conversations where customer_id = $1 and status = 'open'`, [customerId]);
