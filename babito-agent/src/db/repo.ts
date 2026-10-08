@@ -593,6 +593,46 @@ export const repo = {
     return rows;
   },
 
+  /**
+   * What staff told the bot to say to this customer before (not cancelled, oldest first), so a later
+   * "send her the return details" can reuse facts given earlier (an address, a promise). Edits and
+   * superseded drafts repeat each other, so identical instructions are collapsed.
+   */
+  async priorRelayInstructions(db: Db, customerId: string, days: number, limit: number): Promise<{ instruction: string; status: string; created_at: string }[]> {
+    const { rows } = await db.query<{ instruction: string; status: string; created_at: string }>(
+      `select d.instruction, d.status, d.created_at
+       from relay_drafts d join conversations c on c.id = d.conversation_id
+       where c.customer_id = $1 and d.status <> 'cancelled' and d.created_at > now() - make_interval(days => $2)
+       order by d.created_at desc limit $3`,
+      [customerId, days, limit * 3],
+    );
+    const seen = new Set<string>();
+    const out = rows.filter((r) => !seen.has(r.instruction) && seen.add(r.instruction));
+    return out.slice(0, limit).reverse();
+  },
+
+  /**
+   * Customers this staff member was alerted about or drafted for lately (newest first, one row per
+   * customer, never the staff member's own chat). Used to understand a message that is not a Reply to
+   * a message the bot knows.
+   */
+  async recentStaffCustomers(db: Db, staffNumber: string, withinHours: number): Promise<{ conversation_id: string; customer_name: string | null; customer_handle: string }[]> {
+    const { rows } = await db.query<{ conversation_id: string; customer_name: string | null; customer_handle: string }>(
+      `select distinct on (cu.id) x.conversation_id, cu.display_name as customer_name, cu.wa_id as customer_handle
+       from (
+         select conversation_id, created_at from staff_alerts where staff_number = $1 and conversation_id is not null
+         union all
+         select conversation_id, created_at from relay_drafts where staff_number = $1
+       ) x
+       join conversations c on c.id = x.conversation_id
+       join customers cu on cu.id = c.customer_id
+       where x.created_at > now() - make_interval(hours => $2) and cu.wa_id <> $1
+       order by cu.id, x.created_at desc`,
+      [staffNumber, withinHours],
+    );
+    return rows;
+  },
+
   /** The open conversation of this customer, if any (an alert may point at a chat that was closed since). */
   async findOpenConversation(db: Db, customerId: string): Promise<Conversation | null> {
     const { rows } = await db.query<Conversation>(`select * from conversations where customer_id = $1 and status = 'open'`, [customerId]);

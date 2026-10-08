@@ -1185,6 +1185,54 @@ describe("staff relay (answer an alert in plain words, approve a polished custom
     expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 1 }]);
   });
 
+  it("a typed message with no Reply, after an alert about ONE customer, is understood as being about them (named in the preview, nothing sent)", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה, נשלח לך את פרטי ההחזרה."));
+    await staffSays("لازم نرجعلها مع معلومات الارجاع");
+    expect(h.llm.requests).toHaveLength(1);
+    expect(lastToStaff().body).toContain("📝 مسودة الرد");
+    expect(lastToStaff().body).toContain("فهمت أنك تقصد");
+    expect(h.whatsapp.sent.filter((s) => s.to === HEB_CUSTOMER)).toHaveLength(0);
+    expect(await h.q("select count(*)::int n from customers where wa_id = $1", [STAFF])).toEqual([{ n: 0 }]);
+  });
+
+  it("a Reply to some message of the bot that it does not know is treated the same way", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה, פרטי ההחזרה."));
+    await staffSays("ابعتلها معلومات الارجاع", "wamid.some.other.bot.message");
+    expect(h.llm.requests).toHaveLength(1);
+    expect(lastToStaff().body).toContain("📝 مسودة الرد");
+  });
+
+  it("with alerts about two customers, an un-replied message asks which one instead of guessing", async () => {
+    await withAlert();
+    h.llm.push(say("בודקים."));
+    await h.customerSays(textWebhook("972501110009", "היי, איפה ההזמנה?", { name: "רונית" }));
+    const convs = await h.q("select id from conversations order by created_at");
+    await repo.recordStaffAlert(h.db, "wamid.alert.2", convs[1].id, STAFF);
+    h.llm.requests.length = 0;
+    await staffSays("ابعتلها معلومات الارجاع");
+    expect(h.llm.requests).toHaveLength(0);
+    expect(lastToStaff().body).toContain("أكتر من زبون");
+    expect(lastToStaff().body).toContain("דנה");
+    expect(lastToStaff().body).toContain("רונית");
+  });
+
+  it("the draft remembers what staff said earlier about this customer (the return address given yesterday)", async () => {
+    await withAlert();
+    h.llm.push(say("שלום דנה, תודה על העדכון."));
+    await staffSays("بكرا ابعتلها عنوان المخزن: לוד, אזור תעשייה, טלפון 0535366356", "wamid.alert.1");
+    await staffSays("أرسل");
+    h.llm.requests.length = 0;
+
+    h.llm.push(say("שלום דנה, פרטי ההחזרה: לוד, אזור תעשייה."));
+    await staffSays("هلا ابعتلها معلومات الارجاع", "wamid.alert.1");
+    const sent = JSON.stringify(h.llm.requests[0]!.messages);
+    expect(sent).toContain("EARLIER STAFF INSTRUCTIONS");
+    expect(sent).toContain("לוד, אזור תעשייה, טלפון 0535366356");
+    expect(sent).toContain("معلومات الارجاع");
+  });
+
   it("only staff numbers can use it: a customer replying to an alert id is treated as a normal customer", async () => {
     await withAlert();
     h.llm.push(say("שלום"));
