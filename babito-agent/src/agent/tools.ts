@@ -11,7 +11,7 @@ import {
   type OrderDetail,
   type ShopifyService,
 } from "../shopify/service.js";
-import { carrierFromTrackingUrl, type TrackingService } from "../tracking/tracking.js";
+import { carrierFromTrackingNumber, carrierFromTrackingUrl, type TrackingService } from "../tracking/tracking.js";
 import type { KnowledgeService } from "./knowledge.js";
 import type { ToolSpec } from "./llm.js";
 
@@ -66,7 +66,7 @@ async function publicOrder(o: OrderDetail, ctx: ToolContext, live: boolean) {
   const tracking = o.tracking.filter((t) => t.number || t.url);
   const shipped = ["shipped", "partially_shipped"].includes(o.stage);
   const first = tracking.find((t) => t.number);
-  const liveStatus = live && shipped && first?.number && ctx.tracking ? await ctx.tracking.status(first.number, carrierFromTrackingUrl(first.url)) : null;
+  const liveStatus = live && shipped && first?.number && ctx.tracking ? await ctx.tracking.status(first.number, carrierFromTrackingUrl(first.url) ?? carrierFromTrackingNumber(first.number)) : null;
   return {
     order_number: o.name,
     created_at: o.createdAt.slice(0, 10),

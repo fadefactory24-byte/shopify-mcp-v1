@@ -13,7 +13,7 @@ import { businessClock } from "../src/agent/knowledge.js";
 import { buildHistory } from "../src/agent/agent.js";
 import { catalogAvailability, orderNameQuery, orderStage, searchCatalog, stripHtml } from "../src/shopify/service.js";
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
-import { carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/tracking.js";
+import { carrierFromTrackingNumber, carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/tracking.js";
 import { withRetry } from "../src/util/retry.js";
 import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
@@ -205,6 +205,8 @@ describe("live tracking stages", () => {
   it("reads the carrier code from a 17track link only", () => {
     expect(carrierFromTrackingUrl("https://www.17track.net/en/track?nums=UL547537780YP&fc=190012")).toBe(190012);
     expect(carrierFromTrackingUrl("https://www.purolator.com/track?pin=X&fc=5")).toBeUndefined();
+    expect(carrierFromTrackingNumber("JYDIL1000389450YQ")).toBe(191169);
+    expect(carrierFromTrackingNumber("UL547537780YP")).toBeUndefined();
     expect(carrierFromTrackingUrl(null)).toBeUndefined();
   });
 });

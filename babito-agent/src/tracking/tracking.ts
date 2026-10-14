@@ -72,6 +72,11 @@ export function carrierFromTrackingUrl(url: string | null | undefined): number |
   }
 }
 
+/** Our JYTD parcels (`JYDIL...`) are only found by 17TRACK when the carrier code is given (191169). */
+export function carrierFromTrackingNumber(number: string | null | undefined): number | undefined {
+  return number && /^JYDIL\d+YQ$/i.test(number.trim()) ? 191169 : undefined;
+}
+
 const NOT_REGISTERED = -18019902;
 const ALREADY_REGISTERED = -18019901;
 
