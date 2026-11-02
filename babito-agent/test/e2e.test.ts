@@ -1500,6 +1500,7 @@ describe("replies only in business hours (REPLY_ONLY_IN_BUSINESS_HOURS)", () => 
 
   it("email on Friday 15:00 waits for Sunday (no reply window for email), with one acknowledgment", async () => {
     await hoursHarness();
+    at("2026-10-16T11:00:00Z"); // the watermark must come from the fake clock, not the real one
     await h.email!.poll(); // sets the watermark
     at("2026-10-16T12:00:00Z");
     h.mail.receive("dana@example.com", "היי, מתי זה מגיע?");
