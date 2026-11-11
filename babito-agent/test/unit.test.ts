@@ -563,6 +563,7 @@ describe("owner rule: card-charge threats", () => {
     const { CORE_RULES } = await import("../src/agent/prompt.js");
     expect(CORE_RULES).toContain("CANCELLING THE CARD CHARGE");
     expect(CORE_RULES).toMatch(/within 7 days of receiving it/);
-    expect(CORE_RULES).toMatch(/not legal and not allowed/);
+    expect(CORE_RULES).toMatch(/not the right or permitted way/);
+    expect(CORE_RULES).toContain("TONE (premium service");
   });
 });
