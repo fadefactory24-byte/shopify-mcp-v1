@@ -19,6 +19,8 @@ export async function createHarness(envOverrides: Record<string, string> = {}) {
     SHOPIFY_ADMIN_ACCESS_TOKEN: "shpat_test",
     ANTHROPIC_API_KEY: "test",
     DEBOUNCE_MS: "30",
+    EMAIL_REPLY_DELAY_SECONDS: "0",
+    EMAIL_REPLY_COOLDOWN_MINUTES: "0",
     ADMIN_PASSWORD: "admin-password-123",
     CRON_SECRET: "cron-secret",
     SOCIAL_CHANNEL_ENABLED: "true",

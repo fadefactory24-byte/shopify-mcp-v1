@@ -102,6 +102,10 @@ const ConfigSchema = z.object({
   /** Seed only: the server keeps the rotated token in integration_state afterwards. */
   MS_REFRESH_TOKEN: z.string().optional().default(""),
   EMAIL_POLL_SECONDS: int(60),
+  /** Wait this long before answering an email, so a customer who writes twice (contact form + email) gets ONE merged answer. 0 = answer at once. */
+  EMAIL_REPLY_DELAY_SECONDS: int(240),
+  /** After the bot answered an email conversation, a new email within N minutes goes to staff instead of a second bot answer. 0 = off. */
+  EMAIL_REPLY_COOLDOWN_MINUTES: int(30),
   /** Public https URL of this server, for links in alerts. Defaults to Railway's public domain. */
   PUBLIC_BASE_URL: z.string().optional().default(""),
 

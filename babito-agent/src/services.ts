@@ -72,7 +72,11 @@ export function buildServices(
           mail,
           mailbox: cfg.EMAIL_MAILBOX,
           log,
-          schedule: (id) => processorRef?.schedule(id),
+          schedule: (id) => {
+            const delay = cfg.EMAIL_REPLY_DELAY_SECONDS * 1000;
+            if (delay > 0) processorRef?.schedule(id, delay, delay + 60_000);
+            else processorRef?.schedule(id);
+          },
           applyStaffReplies: async (echoes) => {
             await processorRef?.applyEchoes(echoes);
           },
@@ -120,6 +124,7 @@ export function buildServices(
       maxAttempts: cfg.MAX_PROCESS_ATTEMPTS,
       typingIndicator: cfg.WHATSAPP_TYPING_INDICATOR,
       replyOnlyInHours: cfg.REPLY_ONLY_IN_BUSINESS_HOURS,
+      emailReplyCooldownMinutes: cfg.EMAIL_REPLY_COOLDOWN_MINUTES,
       logBodies: cfg.LOG_MESSAGE_BODIES,
       fastModel: cfg.AI_MODEL_FAST,
     },

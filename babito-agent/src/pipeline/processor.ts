@@ -22,6 +22,8 @@ export interface ProcessorConfig {
   typingIndicator: boolean;
   /** Hold customer messages that arrive outside business hours until the store opens (see config). */
   replyOnlyInHours?: boolean;
+  /** Email: after an AI answer, a new email inside this window goes to staff, never a second AI answer (0/undefined = off). */
+  emailReplyCooldownMinutes?: number;
   logBodies: boolean;
   fastModel: string;
 }
@@ -145,12 +147,12 @@ export class MessageProcessor {
 
   // ------------------------------------------------------------------- schedule
 
-  schedule(conversationId: string, delayMs = this.cfg.debounceMs) {
+  schedule(conversationId: string, delayMs = this.cfg.debounceMs, maxHoldMs = MAX_DEBOUNCE_MS) {
     const existing = this.timers.get(conversationId);
     const firstAt = existing?.firstAt ?? Date.now();
     if (existing) clearTimeout(existing.timer);
     // Debounce, but never hold a conversation longer than MAX_DEBOUNCE_MS.
-    const wait = Math.max(0, Math.min(delayMs, firstAt + MAX_DEBOUNCE_MS - Date.now()));
+    const wait = Math.max(0, Math.min(delayMs, firstAt + maxHoldMs - Date.now()));
     const timer = setTimeout(() => {
       this.timers.delete(conversationId);
       this.track(this.processConversation(conversationId));
@@ -308,6 +310,20 @@ export class MessageProcessor {
     if (conv.mode === "paused" || customer.is_blocked || !settings.botEnabled) {
       await repo.setInboundStatus(this.db, ids, "skipped");
       return;
+    }
+
+    // One answer per issue: the bot already replied to this email conversation a moment ago, so a new
+    // email goes to staff (they see the whole thread) instead of a second, possibly different, bot answer.
+    if (this.cfg.emailReplyCooldownMinutes && isEmailHandle(customer.wa_id)) {
+      const lastAi = await repo.lastAiReplyAt(this.db, conversationId);
+      if (lastAi && Date.now() - lastAi.getTime() < this.cfg.emailReplyCooldownMinutes * 60_000) {
+        await repo.setInboundStatus(this.db, ids, "skipped", "recent_ai_reply");
+        this.log.info({ event: "skipped_recent_reply", conversationId }, "email: AI already answered moments ago; staff takes the follow-up");
+        void this.deps.notifier
+          .customerWaiting?.({ conversationId, customerWaId: customer.wa_id, customerName: customer.display_name, text: pending.map((p) => p.body).filter(Boolean).join("\n") || null })
+          .catch(() => {});
+        return;
+      }
     }
 
     const texts = pending.map((p) => p.body).filter((b): b is string => Boolean(b));

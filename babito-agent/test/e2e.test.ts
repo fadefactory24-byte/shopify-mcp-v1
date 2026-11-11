@@ -755,10 +755,10 @@ describe("admin: Embedded Signup diagnostics", () => {
 });
 
 describe("email channel (support mailbox)", () => {
-  async function emailHarness() {
+  async function emailHarness(extra: Record<string, string> = {}) {
     await h.db.close();
     h.processor.stopTimers();
-    h = await createHarness({ EMAIL_CHANNEL_ENABLED: "true", EMAIL_MAILBOX: "support@mybabito.com" });
+    h = await createHarness({ EMAIL_CHANNEL_ENABLED: "true", EMAIL_MAILBOX: "support@mybabito.com", ...extra });
     await h.email!.poll(); // first poll only sets the watermark
   }
   const round = async () => {
@@ -782,6 +782,21 @@ describe("email channel (support mailbox)", () => {
     expect(cust).toEqual({ wa_id: "email:zohar.b.shimol@gmail.com", display_name: "זהר" });
     expect(h.mail.replies).toHaveLength(0); // never "reply" to Shopify's mailer
     expect(h.mail.mails).toEqual([{ to: ["zohar.b.shimol@gmail.com"], subject: "BABITO", text: "היי זהר, ההזמנה כבר בדרך אלייך.\nצוות BABITO" }]);
+  });
+
+  it("a second email right after the bot's answer goes to staff, never a second (different) bot answer", async () => {
+    await emailHarness({ EMAIL_REPLY_COOLDOWN_MINUTES: "30" });
+    h.llm.push(say("שלום נועה,\nההזמנה בדרך אלייך.\nצוות BABITO"));
+    h.mail.receive("noa@example.com", "מתי ההזמנה שלי מגיעה?", { subject: "הזמנה" });
+    await round();
+    expect(h.mail.replies).toHaveLength(1);
+    const requestsBefore = h.llm.requests.length;
+
+    h.mail.receive("noa@example.com", "שלחתי גם בטופס, מתי זה מגיע?", { subject: "הזמנה" });
+    await round();
+    expect(h.mail.replies).toHaveLength(1);
+    expect(h.llm.requests).toHaveLength(requestsBefore);
+    expect((await h.q("select status, error from messages where direction = 'inbound' order by created_at desc limit 1"))[0]).toMatchObject({ status: "skipped", error: "recent_ai_reply" });
   });
 
   it("other Shopify emails are still ignored", async () => {

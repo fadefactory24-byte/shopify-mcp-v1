@@ -15,6 +15,7 @@ import { catalogAvailability, orderNameQuery, orderStage, searchCatalog, stripHt
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
 import { carrierFromTrackingNumber, carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/tracking.js";
 import { withRetry } from "../src/util/retry.js";
+import { businessDaysSince } from "../src/util/businessDays.js";
 import { detectLanguage, stripQuotedReply, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
 import { MalformedSocialWebhookError, parseSocialWebhook, socialHandle } from "../src/social/webhook.js";
@@ -566,5 +567,19 @@ describe("owner rule: card-charge threats", () => {
     expect(CORE_RULES).toMatch(/not legal and not allowed/);
     expect(CORE_RULES).toContain("ONE message per turn");
     expect(CORE_RULES).toContain("TONE (premium service");
+  });
+});
+
+describe("business days since an order (Sunday-Thursday)", () => {
+  it("counts Israeli business days", () => {
+    expect(businessDaysSince("2026-10-31T21:03:45Z", new Date("2026-11-10T12:00:00Z"))).toBe(8); // Sat order, Tue now: Sun-Thu + Sun-Tue
+    expect(businessDaysSince("2026-10-22T10:16:55Z", new Date("2026-11-11T09:00:00Z"))).toBe(14);
+    expect(businessDaysSince("2026-11-11T09:00:00Z", new Date("2026-11-11T12:00:00Z"))).toBe(0);
+    expect(businessDaysSince("garbage", new Date())).toBe(0);
+  });
+  it("the prompt tells the bot to analyse the situation before replying", async () => {
+    const { CORE_RULES } = await import("../src/agent/prompt.js");
+    expect(CORE_RULES).toContain("SITUATION ANALYSIS");
+    expect(CORE_RULES).toContain("delivery_overdue");
   });
 });

@@ -3,6 +3,7 @@ import type { Db } from "../db/client.js";
 import { emailOf } from "../email/channel.js";
 import { repo, type Conversation, type ConversationContext, type Customer, type HandoffReason } from "../db/repo.js";
 import type { Logger } from "../logger.js";
+import { businessDaysSince } from "../util/businessDays.js";
 import { performHandoff, type HandoffNotifier } from "../pipeline/handoff.js";
 import {
   orderBelongsToEmail,
@@ -67,9 +68,15 @@ async function publicOrder(o: OrderDetail, ctx: ToolContext, live: boolean) {
   const shipped = ["shipped", "partially_shipped"].includes(o.stage);
   const first = tracking.find((t) => t.number);
   const liveStatus = live && shipped && first?.number && ctx.tracking ? await ctx.tracking.status(first.number, carrierFromTrackingUrl(first.url) ?? carrierFromTrackingNumber(first.number)) : null;
+  const open = !["delivered", "cancelled", "refunded"].includes(o.stage);
+  const businessDays = businessDaysSince(o.createdAt);
   return {
     order_number: o.name,
     created_at: o.createdAt.slice(0, 10),
+    // Computed for you: how long the customer has really waited versus the published 4-10 business days.
+    days_since_order: Math.floor((Date.now() - new Date(o.createdAt).getTime()) / 86_400_000),
+    business_days_since_order: businessDays,
+    delivery_overdue: open && businessDays > 10,
     stage: o.stage,
     payment_status: o.financialStatus,
     fulfillment_status: o.fulfillmentStatus,

@@ -353,6 +353,15 @@ export const repo = {
     return Number(rows[0]?.n ?? 0);
   },
 
+  /** When the AI last answered in this conversation (null if never). */
+  async lastAiReplyAt(db: Db, conversationId: string): Promise<Date | null> {
+    const { rows } = await db.query<{ at: string | null }>(
+      `select max(created_at)::text as at from messages where conversation_id = $1 and direction = 'outbound' and author = 'ai'`,
+      [conversationId],
+    );
+    return rows[0]?.at ? new Date(rows[0].at) : null;
+  },
+
   // ----------------------------------------------------------------- recovery
   /**
    * Conversations with inbound messages that should have been processed by now (`ready`), and
