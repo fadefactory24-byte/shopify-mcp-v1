@@ -557,3 +557,12 @@ describe("handoff alert says where to reply", () => {
     expect(replyWhere("972501234567")).toContain("admin");
   });
 });
+
+describe("owner rule: card-charge threats", () => {
+  it("is in the core rules with the 7-day return route and a hand-off", async () => {
+    const { CORE_RULES } = await import("../src/agent/prompt.js");
+    expect(CORE_RULES).toContain("CANCELLING THE CARD CHARGE");
+    expect(CORE_RULES).toMatch(/within 7 days of receiving it/);
+    expect(CORE_RULES).toMatch(/not legal and not allowed/);
+  });
+});
