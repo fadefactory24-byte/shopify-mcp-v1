@@ -31,6 +31,37 @@ export function detectLanguage(text: string): Lang | null {
   return null;
 }
 
+
+const BIDI_MARKS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+// First line of a quoted earlier email: Gmail ("On ... wrote:" / "בתאריך ... מאת ...:"), Arabic, Outlook headers.
+const QUOTE_START = [
+  /^on\s.{5,250}\swrote:?$/i,
+  /^בתאריך\s.{5,250}\s(מאת|כתב|כתבה)\s.*$/,
+  /^في\s.{5,250}(كتب|كتبت)\b.*$/,
+  /^-{2,}\s*(original message|forwarded message|הודעה מקורית)/i,
+  /^_{5,}$/,
+];
+
+/**
+ * Removes the quoted earlier email from a customer's reply ("On ... wrote:", "בתאריך ... מאת ...:",
+ * Outlook "From:/Sent:" header blocks, "> ..." lines). Quoted text is ours (bilingual notification
+ * emails), so it must not drive language detection or be read as something the customer wrote.
+ * Keeps the original text when nothing else is left.
+ */
+export function stripQuotedReply(text: string): string {
+  const lines = text.replace(/\r/g, "").split("\n");
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.replace(BIDI_MARKS, "").trim();
+    if (QUOTE_START.some((re) => re.test(line))) break;
+    if (/^(from|מאת|من):\s*\S/i.test(line) && (/\b(sent|date):/i.test(line) || lines.slice(i + 1, i + 4).some((l) => /^(sent|date|נשלח|נשלחה):/i.test(l.replace(BIDI_MARKS, "").trim())))) break;
+    if (line.startsWith(">")) continue;
+    kept.push(lines[i]!);
+  }
+  const out = kept.join("\n").trim();
+  return out || text.trim();
+}
+
 /**
  * WhatsApp renders *bold*, _italic_, ~strike~ and plain lists. Convert common
  * Markdown the model might emit into WhatsApp-friendly text.

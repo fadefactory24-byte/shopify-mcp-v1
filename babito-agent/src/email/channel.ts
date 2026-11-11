@@ -3,6 +3,7 @@ import { repo } from "../db/repo.js";
 import type { Logger } from "../logger.js";
 import type { WhatsAppSender } from "../whatsapp/client.js";
 import type { InboxMessage, MailApi } from "./graph.js";
+import { stripQuotedReply } from "../util/text.js";
 import { isSocialHandle, socialIdOf, socialPlatformOf } from "../social/webhook.js";
 
 /**
@@ -97,7 +98,7 @@ export function parseShopifyContactForm(m: InboxMessage): { email: string; name:
 
 /** Text of an inbound email for the AI: subject on the first message of a thread, capped. */
 function inboundText(m: InboxMessage): string | null {
-  const body = m.text.replace(/\r/g, "").replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000);
+  const body = stripQuotedReply(m.text).replace(/\n{3,}/g, "\n\n").trim().slice(0, 4000);
   const subject = m.subject.replace(/^(re|fw|fwd|השב|העבר)\s*:\s*/gi, "").trim();
   const parts = [subject && !body.startsWith(subject) ? `[Subject: ${subject}]` : "", body].filter(Boolean);
   return parts.length ? parts.join("\n") : null;

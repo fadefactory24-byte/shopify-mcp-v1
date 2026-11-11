@@ -15,10 +15,32 @@ import { catalogAvailability, orderNameQuery, orderStage, searchCatalog, stripHt
 import { normalizePhone, phonesMatch } from "../src/util/phone.js";
 import { carrierFromTrackingNumber, carrierFromTrackingUrl, mapTrackingStatus } from "../src/tracking/tracking.js";
 import { withRetry } from "../src/util/retry.js";
-import { detectLanguage, toWhatsAppText } from "../src/util/text.js";
+import { detectLanguage, stripQuotedReply, toWhatsAppText } from "../src/util/text.js";
 import { MalformedWebhookError, parseWebhook, verifySignature } from "../src/whatsapp/webhook.js";
 import { MalformedSocialWebhookError, parseSocialWebhook, socialHandle } from "../src/social/webhook.js";
 import { CATALOG, CHOKING_ID, mediaWebhook, sign, socialWebhook, statusWebhook, textWebhook } from "./helpers/fakes.js";
+
+
+describe("quoted email text", () => {
+  const gmailHe = "היי,מתי ההזמנה שלי מגיעה?\nבתאריך \u202bיום א׳, 1 בנוב׳ 2026 ב-15:39\u202c\u200f מאת \u202aBABITO <support@mybabito.com>\u202c\u200f:\nأهلًا، طلبك بالطريق إليك\nאנחנו שמחים לעדכן שההזמנה נשלחה";
+  it("drops the Gmail Hebrew quote so our Arabic notification does not set the language", () => {
+    const out = stripQuotedReply(gmailHe);
+    expect(out).toBe("היי,מתי ההזמנה שלי מגיעה?");
+    expect(detectLanguage(out)).toBe("he");
+  });
+  it("drops English 'On ... wrote:' and Outlook header blocks and > lines", () => {
+    expect(stripQuotedReply("Where is it?\nOn Mon, 9 Nov 2026 at 10:00, BABITO <support@mybabito.com> wrote:\n> old text")).toBe("Where is it?");
+    expect(stripQuotedReply("Thanks\nFrom: BABITO\nSent: 09 November 2026\nTo: x\nold")).toBe("Thanks");
+    expect(stripQuotedReply("ok\n> quoted\nmore")).toBe("ok\nmore");
+  });
+  it("keeps a customer's own sentence that starts with a date", () => {
+    expect(stripQuotedReply("בתאריך 5.11 הזמנתי מנשא ועדיין לא הגיע")).toBe("בתאריך 5.11 הזמנתי מנשא ועדיין לא הגיע");
+  });
+  it("returns the original text when only a quote is left", () => {
+    const only = "On Mon, 9 Nov 2026 at 10:00, BABITO <support@mybabito.com> wrote:\nhello";
+    expect(stripQuotedReply(only)).toBe(only);
+  });
+});
 
 describe("language detection", () => {
   it("detects Arabic", () => expect(detectLanguage("عندكم جهاز منع الاختناق؟")).toBe("ar"));
